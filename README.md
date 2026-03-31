@@ -2,9 +2,6 @@
 
 A web app that analyses YouTube videos and generates a child-appropriateness report using AI. Paste a YouTube URL and get an instant breakdown of language, violence, advertising, agenda-pushing, misinformation, and more — with an overall safety score and parental guidance.
 
-![Demo mode screenshot showing the score ring, category breakdown, and parental guidance](https://placehold.co/860x400?text=Screenshot)
-
----
 
 ## Features
 
