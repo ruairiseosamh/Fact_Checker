@@ -1,13 +1,16 @@
-# YouTube Child Safety Checker
+# Child Safety Checker
 
-A web app that analyses YouTube videos and generates a child-appropriateness report using AI. Paste a YouTube URL and get an instant breakdown of language, violence, advertising, agenda-pushing, misinformation, and more — with an overall safety score and parental guidance.
+A web app that analyses YouTube videos, images, and online terminology for child-appropriateness using AI. Get an instant breakdown of language, violence, advertising, agenda-pushing, misinformation, AI-generated content, and more — with an overall safety score and parental guidance.
 
+---
 
 ## Features
 
+### Video Checker
+- Paste a YouTube URL to analyse the video transcript
 - **Overall safety score** (0–100) with a visual score ring
 - **Age rating** — All Ages, 6+, 9+, 13+, 16+, or 18+
-- **7 content categories**, each scored and flagged by severity:
+- **8 content categories**, each scored and flagged by severity:
   - Language (profanity, offensive terms)
   - Violence
   - Adult themes (sex, drugs, alcohol)
@@ -15,10 +18,38 @@ A web app that analyses YouTube videos and generates a child-appropriateness rep
   - Agenda / bias (political, ideological, religious)
   - Misinformation (false claims, pseudoscience)
   - Fear & anxiety
+  - **AI / Deepfake** (signs of AI-generated voice, synthetic script, deepfake impersonation)
 - **Positives list** — educational value, good role models, etc.
 - **Red flags** — the most important concerns for parents
 - **Parental guidance** — specific, actionable advice
-- **Demo mode** — shows a realistic example result when no API key is configured
+
+### Image Analyser
+- Paste a direct image URL to analyse it for child safety
+- Same 8-category scoring system, adapted for visual content:
+  - Visible text and language
+  - Violent or disturbing imagery
+  - Adult / sexual visual content
+  - Commercial branding and advertising
+  - Political or ideological imagery
+  - Misleading or manipulated visuals
+  - Fear-inducing imagery
+  - **AI / Deepfake** — lighting inconsistencies, anatomical errors, synthetic media indicators
+
+### Term Lookup
+- Type any word or phrase (e.g. *blue pill*, *grooming*, *MGTOW*) to understand its meaning in the context of child internet safety
+- Results include:
+  - **Risk level** (None → Critical), colour-coded
+  - Plain-English definition
+  - Associated online communities and platforms
+  - Child safety context and implications
+  - Warning signs to watch for in your child's behaviour
+  - Related terms (clickable — runs a new lookup instantly)
+  - Parental guidance
+
+### General
+- **Demo mode** — shows realistic example results when no API key is configured
+- Real-time **streaming analysis** via Server-Sent Events
+- Dark-themed, responsive single-page UI
 
 ---
 
@@ -27,6 +58,7 @@ A web app that analyses YouTube videos and generates a child-appropriateness rep
 - Python 3.9+
 - An [Anthropic API key](https://console.anthropic.com/settings/keys)
 - YouTube videos must have captions/transcripts enabled
+- Image URLs must be publicly accessible
 
 ---
 
@@ -54,7 +86,7 @@ pip install -r requirements.txt
 
 **4. Add your API key**
 
-Edit `.env` and replace the placeholder with your real key:
+Create a `.env` file in the project root:
 
 ```
 ANTHROPIC_API_KEY=sk-ant-api03-...
@@ -74,7 +106,7 @@ Open [http://localhost:5000](http://localhost:5000) in your browser.
 
 ## Demo Mode
 
-If no valid API key is configured, the app runs in **demo mode** — a yellow banner is shown at the top and any URL you submit returns a realistic example result so you can explore the interface without needing an API key.
+If no valid API key is configured, the app runs in **demo mode** — a yellow banner is shown at the top and any submission returns a realistic example result so you can explore the interface without needing an API key.
 
 ---
 
@@ -82,27 +114,42 @@ If no valid API key is configured, the app runs in **demo mode** — a yellow ba
 
 ```
 Fact_Checker/
-├── app.py              # Flask backend — transcript fetching, Claude API calls
+├── app.py              # Flask backend — content fetching, Claude API calls, SSE streaming
 ├── requirements.txt    # Python dependencies
 ├── .env                # API key (not committed to version control)
 └── templates/
-    └── index.html      # Single-page frontend
+    └── index.html      # Single-page frontend (tabbed UI)
 ```
 
 ---
 
 ## How It Works
 
-1. You paste a YouTube URL into the app
+### Video Checker
+1. Paste a YouTube URL
 2. The backend extracts the video ID and fetches the transcript via `youtube-transcript-api`
-3. The transcript is sent to **Claude Opus 4.6** (with adaptive thinking enabled) for analysis
-4. Claude returns a structured JSON report covering all content categories
-5. The frontend renders the report as a visual dashboard
+3. The transcript is sent to **Claude Opus 4.6** (with adaptive thinking) for analysis
+4. Claude returns a structured JSON report covering all 8 categories
+5. Results stream back in real time via SSE and render as a visual dashboard
+
+### Image Analyser
+1. Paste a direct image URL
+2. The image is passed to Claude's **vision API** alongside the analysis prompt
+3. Claude analyses the actual visual content and returns the same structured report
+4. Results stream back and render identically to video results
+
+### Term Lookup
+1. Type a word or phrase
+2. Claude uses its knowledge of online communities, grooming tactics, and radicalisation pathways to explain the term in a child safety context
+3. Results include risk level, context, warning signs, and parental guidance
 
 ---
 
 ## Notes
 
-- Videos without captions or with disabled transcripts cannot be analysed
+- YouTube videos without captions or with disabled transcripts cannot be analysed
 - Long transcripts are capped at ~80,000 characters to manage token usage
 - Analysis quality depends on transcript accuracy (auto-generated captions can contain errors)
+- Image URLs must point directly to an image file and be publicly accessible
+- The AI/Deepfake category analyses transcript and visual patterns — it cannot perform frame-by-frame forensic video analysis
+- On macOS with pyenv, SSL certificate verification uses the system Keychain via `truststore` to handle corporate proxies
