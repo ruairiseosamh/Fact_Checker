@@ -1,0 +1,668 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>YouTube Child Safety Checker</title>
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+    :root {
+      --bg: #0f1117;
+      --surface: #1a1d27;
+      --surface2: #222536;
+      --border: #2e3148;
+      --text: #e2e8f0;
+      --text-muted: #94a3b8;
+      --accent: #6366f1;
+      --accent-hover: #818cf8;
+      --green: #22c55e;
+      --yellow: #eab308;
+      --orange: #f97316;
+      --red: #ef4444;
+      --radius: 12px;
+    }
+
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      background: var(--bg);
+      color: var(--text);
+      min-height: 100vh;
+      padding: 2rem 1rem;
+    }
+
+    .container {
+      max-width: 860px;
+      margin: 0 auto;
+    }
+
+    header {
+      text-align: center;
+      margin-bottom: 2.5rem;
+    }
+
+    header h1 {
+      font-size: 2rem;
+      font-weight: 700;
+      letter-spacing: -0.5px;
+    }
+
+    header h1 span { color: var(--accent); }
+
+    header p {
+      color: var(--text-muted);
+      margin-top: 0.5rem;
+      font-size: 1rem;
+    }
+
+    .input-card {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      padding: 1.5rem;
+      margin-bottom: 2rem;
+    }
+
+    .input-row {
+      display: flex;
+      gap: 0.75rem;
+    }
+
+    .input-row input {
+      flex: 1;
+      background: var(--surface2);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      color: var(--text);
+      font-size: 0.95rem;
+      padding: 0.75rem 1rem;
+      outline: none;
+      transition: border-color 0.2s;
+    }
+
+    .input-row input:focus { border-color: var(--accent); }
+    .input-row input::placeholder { color: var(--text-muted); }
+
+    .btn {
+      background: var(--accent);
+      border: none;
+      border-radius: 8px;
+      color: #fff;
+      cursor: pointer;
+      font-size: 0.95rem;
+      font-weight: 600;
+      padding: 0.75rem 1.5rem;
+      transition: background 0.2s, opacity 0.2s;
+      white-space: nowrap;
+    }
+
+    .btn:hover { background: var(--accent-hover); }
+    .btn:disabled { opacity: 0.5; cursor: not-allowed; }
+
+    /* Status / loading */
+    #status {
+      text-align: center;
+      color: var(--text-muted);
+      padding: 1rem;
+      display: none;
+    }
+
+    .spinner {
+      display: inline-block;
+      width: 20px;
+      height: 20px;
+      border: 2px solid var(--border);
+      border-top-color: var(--accent);
+      border-radius: 50%;
+      animation: spin 0.8s linear infinite;
+      vertical-align: middle;
+      margin-right: 0.5rem;
+    }
+
+    @keyframes spin { to { transform: rotate(360deg); } }
+
+    /* Error */
+    #error {
+      background: rgba(239,68,68,0.1);
+      border: 1px solid rgba(239,68,68,0.3);
+      border-radius: var(--radius);
+      color: #fca5a5;
+      display: none;
+      padding: 1rem 1.25rem;
+      margin-bottom: 1.5rem;
+    }
+
+    /* Results */
+    #results { display: none; }
+
+    /* Score hero */
+    .score-hero {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      padding: 2rem;
+      text-align: center;
+      margin-bottom: 1.5rem;
+    }
+
+    .score-ring {
+      position: relative;
+      display: inline-block;
+      margin-bottom: 1rem;
+    }
+
+    .score-ring svg { display: block; }
+
+    .score-text {
+      position: absolute;
+      top: 50%;
+      left: 50%;
+      transform: translate(-50%, -50%);
+      text-align: center;
+    }
+
+    .score-number {
+      font-size: 2.5rem;
+      font-weight: 800;
+      line-height: 1;
+    }
+
+    .score-label {
+      font-size: 0.75rem;
+      color: var(--text-muted);
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+    }
+
+    .age-badge {
+      display: inline-block;
+      border-radius: 999px;
+      font-size: 0.9rem;
+      font-weight: 700;
+      padding: 0.35rem 1rem;
+      margin-bottom: 0.75rem;
+    }
+
+    .summary-text {
+      color: var(--text-muted);
+      font-size: 0.95rem;
+      line-height: 1.6;
+      max-width: 600px;
+      margin: 0 auto;
+    }
+
+    /* Category grid */
+    .section-title {
+      font-size: 1rem;
+      font-weight: 600;
+      color: var(--text-muted);
+      text-transform: uppercase;
+      letter-spacing: 0.08em;
+      margin-bottom: 1rem;
+    }
+
+    .categories {
+      display: grid;
+      grid-template-columns: repeat(auto-fill, minmax(240px, 1fr));
+      gap: 1rem;
+      margin-bottom: 1.5rem;
+    }
+
+    .category-card {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      padding: 1.25rem;
+    }
+
+    .category-header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      margin-bottom: 0.75rem;
+    }
+
+    .category-name {
+      font-size: 0.875rem;
+      font-weight: 600;
+    }
+
+    .severity-badge {
+      border-radius: 4px;
+      font-size: 0.7rem;
+      font-weight: 700;
+      padding: 0.15rem 0.5rem;
+      text-transform: uppercase;
+    }
+
+    .severity-none  { background: rgba(34,197,94,0.15); color: #86efac; }
+    .severity-mild  { background: rgba(234,179,8,0.15); color: #fde047; }
+    .severity-moderate { background: rgba(249,115,22,0.15); color: #fdba74; }
+    .severity-severe { background: rgba(239,68,68,0.15); color: #fca5a5; }
+
+    .bar-track {
+      background: var(--border);
+      border-radius: 999px;
+      height: 6px;
+      overflow: hidden;
+      margin-bottom: 0.6rem;
+    }
+
+    .bar-fill {
+      border-radius: 999px;
+      height: 100%;
+      transition: width 0.6s ease;
+    }
+
+    .category-details {
+      font-size: 0.8rem;
+      color: var(--text-muted);
+      line-height: 1.5;
+    }
+
+    .examples-list {
+      margin-top: 0.5rem;
+      padding-left: 1rem;
+    }
+
+    .examples-list li {
+      font-size: 0.75rem;
+      color: var(--orange);
+      margin-bottom: 0.2rem;
+    }
+
+    /* Positives / red flags */
+    .two-col {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 1rem;
+      margin-bottom: 1.5rem;
+    }
+
+    @media (max-width: 600px) {
+      .two-col { grid-template-columns: 1fr; }
+      .input-row { flex-direction: column; }
+    }
+
+    .list-card {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      padding: 1.25rem;
+    }
+
+    .list-card h3 {
+      font-size: 0.875rem;
+      font-weight: 600;
+      margin-bottom: 0.75rem;
+    }
+
+    .check-list, .flag-list {
+      list-style: none;
+    }
+
+    .check-list li::before { content: "✓ "; color: var(--green); }
+    .flag-list li::before  { content: "⚠ "; color: var(--orange); }
+
+    .check-list li, .flag-list li {
+      font-size: 0.85rem;
+      color: var(--text-muted);
+      line-height: 1.5;
+      margin-bottom: 0.3rem;
+    }
+
+    /* Parental guidance */
+    .guidance-card {
+      background: rgba(99,102,241,0.08);
+      border: 1px solid rgba(99,102,241,0.25);
+      border-radius: var(--radius);
+      padding: 1.25rem;
+      margin-bottom: 1.5rem;
+    }
+
+    .guidance-card h3 {
+      font-size: 0.875rem;
+      font-weight: 600;
+      color: var(--accent-hover);
+      margin-bottom: 0.5rem;
+    }
+
+    .guidance-card p {
+      font-size: 0.9rem;
+      color: var(--text-muted);
+      line-height: 1.6;
+    }
+
+    /* Demo banner */
+    .demo-banner {
+      background: rgba(234,179,8,0.08);
+      border: 1px solid rgba(234,179,8,0.3);
+      border-radius: var(--radius);
+      color: #fde047;
+      font-size: 0.875rem;
+      line-height: 1.6;
+      margin-bottom: 2rem;
+      padding: 1rem 1.25rem;
+    }
+
+    .demo-banner strong { display: block; margin-bottom: 0.25rem; }
+
+    .demo-banner code {
+      background: rgba(234,179,8,0.12);
+      border-radius: 4px;
+      font-family: monospace;
+      font-size: 0.8rem;
+      padding: 0.1rem 0.4rem;
+    }
+
+    .demo-label {
+      background: rgba(234,179,8,0.15);
+      border: 1px solid rgba(234,179,8,0.3);
+      border-radius: 999px;
+      color: #fde047;
+      font-size: 0.7rem;
+      font-weight: 700;
+      letter-spacing: 0.06em;
+      padding: 0.2rem 0.6rem;
+      text-transform: uppercase;
+      vertical-align: middle;
+      margin-left: 0.5rem;
+    }
+
+    /* Video info */
+    .video-meta {
+      font-size: 0.8rem;
+      color: var(--text-muted);
+      text-align: center;
+      margin-bottom: 1rem;
+    }
+
+    .video-meta a { color: var(--accent-hover); text-decoration: none; }
+    .video-meta a:hover { text-decoration: underline; }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <header>
+      <h1>YouTube <span>Child Safety</span> Checker</h1>
+      <p>Paste a YouTube URL to get an AI-powered content rating and parent's guide</p>
+    </header>
+
+    {% if demo_mode %}
+    <div class="demo-banner">
+      <strong>Demo Mode — No API key configured</strong>
+      Results below are example output to show what the interface looks like.
+      To enable real analysis, add your Anthropic API key to <code>.env</code>:
+      <code>ANTHROPIC_API_KEY=sk-ant-...</code>
+      &nbsp;Get a key at <a href="https://console.anthropic.com/settings/keys" target="_blank" rel="noopener" style="color:inherit;text-decoration:underline">console.anthropic.com</a>.
+    </div>
+    {% endif %}
+
+    <div class="input-card">
+      <div class="input-row">
+        <input
+          id="urlInput"
+          type="url"
+          placeholder="https://www.youtube.com/watch?v=..."
+          autofocus
+        />
+        <button class="btn" id="analyseBtn" onclick="analyse()">Analyse</button>
+      </div>
+    </div>
+
+    <div id="status">
+      <span class="spinner"></span>
+      <span id="statusText">Fetching transcript...</span>
+    </div>
+
+    <div id="error"></div>
+
+    <div id="results"></div>
+  </div>
+
+  <script>
+    const urlInput   = document.getElementById("urlInput");
+    const analyseBtn = document.getElementById("analyseBtn");
+    const statusEl   = document.getElementById("status");
+    const statusText = document.getElementById("statusText");
+    const errorEl    = document.getElementById("error");
+    const resultsEl  = document.getElementById("results");
+
+    urlInput.addEventListener("keydown", (e) => {
+      if (e.key === "Enter") analyse();
+    });
+
+    function setStatus(msg) {
+      statusEl.style.display = "block";
+      statusText.textContent = msg;
+    }
+
+    function hideStatus() {
+      statusEl.style.display = "none";
+    }
+
+    function showError(msg) {
+      errorEl.textContent = msg;
+      errorEl.style.display = "block";
+      hideStatus();
+    }
+
+    function hideError() {
+      errorEl.style.display = "none";
+    }
+
+    function scoreColor(score) {
+      if (score >= 80) return "var(--green)";
+      if (score >= 60) return "var(--yellow)";
+      if (score >= 40) return "var(--orange)";
+      return "var(--red)";
+    }
+
+    function categoryColor(score10) {
+      if (score10 >= 8) return "var(--green)";
+      if (score10 >= 6) return "var(--yellow)";
+      if (score10 >= 4) return "var(--orange)";
+      return "var(--red)";
+    }
+
+    function ageBadgeStyle(rating) {
+      const styles = {
+        "All Ages": "background:rgba(34,197,94,0.15);color:#86efac;border:1px solid rgba(34,197,94,0.3)",
+        "6+":       "background:rgba(34,197,94,0.1);color:#86efac;border:1px solid rgba(34,197,94,0.2)",
+        "9+":       "background:rgba(234,179,8,0.15);color:#fde047;border:1px solid rgba(234,179,8,0.3)",
+        "13+":      "background:rgba(249,115,22,0.15);color:#fdba74;border:1px solid rgba(249,115,22,0.3)",
+        "16+":      "background:rgba(239,68,68,0.1);color:#fca5a5;border:1px solid rgba(239,68,68,0.2)",
+        "18+":      "background:rgba(239,68,68,0.2);color:#fca5a5;border:1px solid rgba(239,68,68,0.4)",
+      };
+      return styles[rating] || styles["13+"];
+    }
+
+    function categoryLabel(key) {
+      const labels = {
+        language:          "Language",
+        violence:          "Violence",
+        adult_themes:      "Adult Themes",
+        advertising_sales: "Ads & Sales",
+        agenda_pushing:    "Agenda / Bias",
+        misinformation:    "Misinformation",
+        fear_anxiety:      "Fear & Anxiety",
+      };
+      return labels[key] || key;
+    }
+
+    function buildRing(score) {
+      const r = 54;
+      const circ = 2 * Math.PI * r;
+      const offset = circ * (1 - score / 100);
+      const color = scoreColor(score);
+      return `
+        <svg width="140" height="140" viewBox="0 0 140 140">
+          <circle cx="70" cy="70" r="${r}" fill="none" stroke="var(--border)" stroke-width="10"/>
+          <circle cx="70" cy="70" r="${r}" fill="none" stroke="${color}" stroke-width="10"
+            stroke-dasharray="${circ}" stroke-dashoffset="${offset}"
+            stroke-linecap="round" transform="rotate(-90 70 70)"
+            style="transition:stroke-dashoffset 0.8s ease"/>
+        </svg>`;
+    }
+
+    function renderResults(data) {
+      const r = data;
+      const cats = r.categories;
+
+      const categoryCards = Object.entries(cats).map(([key, cat]) => {
+        const barPct = (cat.score / 10) * 100;
+        const examples = cat.examples && cat.examples.length > 0
+          ? `<ul class="examples-list">${cat.examples.map(e => `<li>${escHtml(e)}</li>`).join("")}</ul>`
+          : "";
+        return `
+          <div class="category-card">
+            <div class="category-header">
+              <span class="category-name">${categoryLabel(key)}</span>
+              <span class="severity-badge severity-${cat.severity}">${cat.severity}</span>
+            </div>
+            <div class="bar-track">
+              <div class="bar-fill" style="width:${barPct}%;background:${categoryColor(cat.score)}"></div>
+            </div>
+            <div class="category-details">
+              ${escHtml(cat.details)}
+              ${examples}
+            </div>
+          </div>`;
+      }).join("");
+
+      const positives = (r.positives || []).map(p => `<li>${escHtml(p)}</li>`).join("");
+      const redFlags  = (r.red_flags  || []).map(f => `<li>${escHtml(f)}</li>`).join("");
+
+      const ytUrl = `https://www.youtube.com/watch?v=${r.video_id}`;
+      const demoLabel = r.is_demo ? `<span class="demo-label">Demo</span>` : "";
+
+      resultsEl.innerHTML = `
+        <div class="video-meta">
+          <a href="${ytUrl}" target="_blank" rel="noopener noreferrer">▶ youtube.com/watch?v=${r.video_id}</a>
+          ${r.language ? ` &nbsp;·&nbsp; Transcript language: ${escHtml(r.language)}` : ""}
+          ${demoLabel}
+        </div>
+
+        <div class="score-hero">
+          <div class="score-ring">
+            ${buildRing(r.overall_score)}
+            <div class="score-text">
+              <div class="score-number" style="color:${scoreColor(r.overall_score)}">${r.overall_score}</div>
+              <div class="score-label">/ 100</div>
+            </div>
+          </div>
+          <div>
+            <span class="age-badge" style="${ageBadgeStyle(r.age_rating)}">${escHtml(r.age_rating)}</span>
+          </div>
+          <p class="summary-text">${escHtml(r.summary)}</p>
+        </div>
+
+        <p class="section-title">Category Breakdown</p>
+        <div class="categories">${categoryCards}</div>
+
+        <div class="two-col">
+          <div class="list-card">
+            <h3 style="color:var(--green)">Positives</h3>
+            <ul class="check-list">${positives || "<li>None identified</li>"}</ul>
+          </div>
+          <div class="list-card">
+            <h3 style="color:var(--orange)">Red Flags</h3>
+            <ul class="flag-list">${redFlags || "<li>None identified</li>"}</ul>
+          </div>
+        </div>
+
+        <div class="guidance-card">
+          <h3>Parental Guidance</h3>
+          <p>${escHtml(r.parental_guidance)}</p>
+        </div>
+      `;
+
+      resultsEl.style.display = "block";
+    }
+
+    function escHtml(str) {
+      if (!str) return "";
+      return String(str)
+        .replace(/&/g, "&amp;")
+        .replace(/</g, "&lt;")
+        .replace(/>/g, "&gt;")
+        .replace(/"/g, "&quot;");
+    }
+
+    async function analyse() {
+      const url = urlInput.value.trim();
+      if (!url) {
+        showError("Please enter a YouTube URL.");
+        return;
+      }
+
+      hideError();
+      resultsEl.style.display = "none";
+      analyseBtn.disabled = true;
+      setStatus("Fetching video transcript...");
+
+      try {
+        const response = await fetch("/analyse", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ url }),
+        });
+
+        if (!response.ok) {
+          const err = await response.json();
+          showError(err.error || "Server error. Please try again.");
+          analyseBtn.disabled = false;
+          return;
+        }
+
+        const contentType = response.headers.get("Content-Type") || "";
+
+        // Demo mode returns plain JSON; live mode returns SSE stream
+        if (contentType.includes("application/json")) {
+          const payload = await response.json();
+          if (payload.error) {
+            showError(payload.error);
+          } else if (payload.result) {
+            hideStatus();
+            renderResults(payload.result);
+          }
+        } else {
+          const reader = response.body.getReader();
+          const decoder = new TextDecoder();
+          let buffer = "";
+
+          while (true) {
+            const { value, done } = await reader.read();
+            if (done) break;
+
+            buffer += decoder.decode(value, { stream: true });
+            const lines = buffer.split("\n\n");
+            buffer = lines.pop(); // keep incomplete chunk
+
+            for (const line of lines) {
+              if (!line.startsWith("data: ")) continue;
+              const payload = JSON.parse(line.slice(6));
+
+              if (payload.status) {
+                setStatus(payload.status);
+              } else if (payload.error) {
+                showError(payload.error);
+                analyseBtn.disabled = false;
+                return;
+              } else if (payload.result) {
+                hideStatus();
+                renderResults(payload.result);
+              }
+            }
+          }
+        }
+      } catch (err) {
+        showError("Network error: " + err.message);
+      } finally {
+        analyseBtn.disabled = false;
+        hideStatus();
+      }
+    }
+  </script>
+</body>
+</html>
