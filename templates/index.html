@@ -496,6 +496,54 @@
     }
 
     .chip-link:hover { background: rgba(99,102,241,0.1); border-color: var(--accent); }
+
+    /* Mode toggle (URL vs Upload) */
+    .mode-toggle {
+      display: flex;
+      gap: 0.4rem;
+      flex-wrap: wrap;
+      margin-bottom: 1rem;
+    }
+
+    .mode-btn {
+      background: var(--surface2);
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      color: var(--text-muted);
+      cursor: pointer;
+      font-size: 0.8rem;
+      font-weight: 600;
+      padding: 0.35rem 0.9rem;
+      transition: background 0.15s, color 0.15s, border-color 0.15s;
+    }
+
+    .mode-btn:hover { color: var(--text); border-color: var(--accent); }
+    .mode-btn.active { background: rgba(99,102,241,0.15); border-color: var(--accent); color: var(--accent-hover); }
+
+    /* File picker */
+    #urlWrapper, #fileWrapper { flex: 1; display: flex; }
+    #urlWrapper input { flex: 1; }
+
+    .file-label {
+      flex: 1;
+      background: var(--surface2);
+      border: 1px dashed var(--border);
+      border-radius: 8px;
+      color: var(--text-muted);
+      cursor: pointer;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 0.9rem;
+      padding: 0.75rem 1rem;
+      transition: border-color 0.2s, background 0.2s, color 0.2s;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+
+    .file-label:hover { border-color: var(--accent); background: rgba(99,102,241,0.05); color: var(--text); }
+    .file-label.has-file { border-style: solid; border-color: var(--accent); color: var(--text); }
   </style>
 </head>
 <body>
@@ -522,13 +570,17 @@
     </div>
 
     <div class="input-card">
+      <div class="mode-toggle" id="modeToggle"></div>
       <div class="input-row">
-        <input
-          id="urlInput"
-          type="url"
-          placeholder="https://www.youtube.com/watch?v=..."
-          autofocus
-        />
+        <div id="urlWrapper">
+          <input id="urlInput" type="url" placeholder="https://www.youtube.com/watch?v=..." autofocus />
+        </div>
+        <div id="fileWrapper" style="display:none">
+          <label class="file-label" id="fileLabel" for="fileInput">
+            <span id="fileLabelText">Choose file…</span>
+          </label>
+          <input id="fileInput" type="file" style="display:none" onchange="handleFileSelect()" />
+        </div>
         <button class="btn" id="analyseBtn" onclick="analyse()">Analyse</button>
       </div>
     </div>
@@ -544,24 +596,88 @@
   </div>
 
   <script>
-    const urlInput   = document.getElementById("urlInput");
-    const analyseBtn = document.getElementById("analyseBtn");
-    const statusEl   = document.getElementById("status");
-    const statusText = document.getElementById("statusText");
-    const errorEl    = document.getElementById("error");
-    const resultsEl  = document.getElementById("results");
-    let currentUrl   = "";
-    let currentTab   = "video";
+    const urlInput    = document.getElementById("urlInput");
+    const urlWrapper  = document.getElementById("urlWrapper");
+    const fileWrapper = document.getElementById("fileWrapper");
+    const fileInput   = document.getElementById("fileInput");
+    const fileLabel   = document.getElementById("fileLabel");
+    const fileLabelText = document.getElementById("fileLabelText");
+    const analyseBtn  = document.getElementById("analyseBtn");
+    const statusEl    = document.getElementById("status");
+    const statusText  = document.getElementById("statusText");
+    const errorEl     = document.getElementById("error");
+    const resultsEl   = document.getElementById("results");
+    let currentUrl    = "";
+    let currentTab    = "video";
+    let currentMode   = "url"; // "url" | "image-upload" | "video-upload" | "text-upload"
 
     urlInput.addEventListener("keydown", (e) => {
       if (e.key === "Enter") analyse();
     });
 
+    function rebuildModeToggle(tab) {
+      const toggle = document.getElementById("modeToggle");
+      toggle.innerHTML = "";
+      if (tab === "term") return;
+
+      const defs = tab === "video"
+        ? [["url", "YouTube URL"], ["video-upload", "Upload Video"], ["text-upload", "Upload Text"]]
+        : [["url", "Image URL"], ["image-upload", "Upload Image"]];
+
+      defs.forEach(([mode, label]) => {
+        const btn = document.createElement("button");
+        btn.className = "mode-btn" + (mode === currentMode ? " active" : "");
+        btn.dataset.mode = mode;
+        btn.textContent = label;
+        btn.onclick = () => switchMode(mode);
+        toggle.appendChild(btn);
+      });
+    }
+
+    function switchMode(mode) {
+      currentMode = mode;
+      document.querySelectorAll(".mode-btn").forEach(btn => {
+        btn.classList.toggle("active", btn.dataset.mode === mode);
+      });
+
+      const isUpload = mode !== "url";
+      urlWrapper.style.display = isUpload ? "none" : "";
+      fileWrapper.style.display = isUpload ? "" : "none";
+
+      if (isUpload) {
+        fileInput.accept = mode === "image-upload" ? "image/jpeg,image/png,image/gif,image/webp"
+                         : mode === "video-upload" ? "video/mp4,video/webm,video/quicktime,.avi,.mkv"
+                         : ".txt,.md,.csv,.srt,.vtt,text/plain";
+        fileLabelText.textContent = "Choose file…";
+        fileLabel.classList.remove("has-file");
+        fileInput.value = "";
+      } else {
+        urlInput.focus();
+      }
+    }
+
+    function handleFileSelect() {
+      const file = fileInput.files[0];
+      if (file) {
+        fileLabelText.textContent = file.name;
+        fileLabel.classList.add("has-file");
+      } else {
+        fileLabelText.textContent = "Choose file…";
+        fileLabel.classList.remove("has-file");
+      }
+    }
+
     function switchTab(tab) {
       currentTab = tab;
+      currentMode = "url";
       resultsEl.style.display = "none";
       hideError();
       urlInput.value = "";
+      fileInput.value = "";
+      fileLabelText.textContent = "Choose file…";
+      fileLabel.classList.remove("has-file");
+      urlWrapper.style.display = "";
+      fileWrapper.style.display = "none";
 
       const tabs = { tabVideo: "video", tabTerm: "term", tabImage: "image" };
       Object.keys(tabs).forEach(id => {
@@ -581,8 +697,13 @@
         urlInput.placeholder = "https://example.com/image.jpg";
         analyseBtn.textContent = "Analyse";
       }
+
+      rebuildModeToggle(tab);
       urlInput.focus();
     }
+
+    // Initialise mode toggle for the default tab
+    rebuildModeToggle("video");
 
     function setStatus(msg) {
       statusEl.style.display = "block";
@@ -689,9 +810,14 @@
       const demoLabel = r.is_demo ? `<span class="demo-label">Demo</span>` : "";
       const sourceLabel = r.source_label ? escHtml(r.source_label) : "content";
 
+      const isUpload = r.source_label && r.source_label.startsWith("uploaded");
+      const metaIdHtml = isUpload
+        ? `<span>${escHtml(r.video_id)}</span>`
+        : `<a href="${escHtml(currentUrl)}" target="_blank" rel="noopener noreferrer">${escHtml(r.video_id)}</a>`;
+
       resultsEl.innerHTML = `
         <div class="video-meta">
-          <a href="${escHtml(currentUrl)}" target="_blank" rel="noopener noreferrer">${escHtml(r.video_id)}</a>
+          ${metaIdHtml}
           &nbsp;·&nbsp; ${sourceLabel}
           ${r.language && r.language !== "unknown" ? ` &nbsp;·&nbsp; ${escHtml(r.language)}` : ""}
           ${demoLabel}
@@ -744,28 +870,47 @@
     }
 
     async function analyse() {
-      const value = urlInput.value.trim();
-      if (!value) {
-        showError(currentTab === "video" ? "Please enter a YouTube URL." : currentTab === "image" ? "Please enter an image URL." : "Please enter a term or phrase.");
-        return;
+      let endpoint, fetchOptions;
+
+      if (currentMode === "url") {
+        const value = urlInput.value.trim();
+        if (!value) {
+          showError(
+            currentTab === "video" ? "Please enter a YouTube URL." :
+            currentTab === "image" ? "Please enter an image URL." :
+            "Please enter a term or phrase."
+          );
+          return;
+        }
+        if (currentTab === "video") currentUrl = value;
+        endpoint = currentTab === "video" ? "/analyse" : currentTab === "image" ? "/analyse-image" : "/explain";
+        const body = currentTab === "term" ? { term: value } : { url: value };
+        fetchOptions = { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) };
+      } else {
+        const file = fileInput.files[0];
+        if (!file) { showError("Please select a file."); return; }
+        endpoint = currentMode === "video-upload" ? "/upload-video"
+                 : currentMode === "text-upload"  ? "/upload-text"
+                 : "/upload-image";
+        const formData = new FormData();
+        formData.append("file", file);
+        fetchOptions = { method: "POST", body: formData };
       }
 
-      if (currentTab === "video") currentUrl = value;
+      const statusMsgs = {
+        "url":          currentTab === "video" ? "Fetching video transcript..." : currentTab === "image" ? "Analysing image..." : "Researching term...",
+        "video-upload": "Uploading video and extracting frames...",
+        "image-upload": "Uploading and analysing image...",
+        "text-upload":  "Uploading and analysing text...",
+      };
 
       hideError();
       resultsEl.style.display = "none";
       analyseBtn.disabled = true;
-      setStatus(currentTab === "video" ? "Fetching video transcript..." : currentTab === "image" ? "Analysing image..." : "Researching term...");
-
-      const endpoint = currentTab === "video" ? "/analyse" : currentTab === "image" ? "/analyse-image" : "/explain";
-      const body     = currentTab === "term" ? { term: value } : { url: value };
+      setStatus(statusMsgs[currentMode] || "Analysing...");
 
       try {
-        const response = await fetch(endpoint, {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify(body),
-        });
+        const response = await fetch(endpoint, fetchOptions);
 
         if (!response.ok) {
           const err = await response.json();
