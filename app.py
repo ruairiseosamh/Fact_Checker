@@ -1,6 +1,9 @@
 import os
 import re
 import json
+import base64
+import tempfile
+import mimetypes
 import truststore
 import requests
 from typing import Optional, Tuple
@@ -15,6 +18,7 @@ from youtube_transcript_api import YouTubeTranscriptApi, NoTranscriptFound, Tran
 import anthropic
 
 app = Flask(__name__)
+app.config["MAX_CONTENT_LENGTH"] = 100 * 1024 * 1024  # 100 MB max upload
 
 DEMO_MODE = not os.environ.get("ANTHROPIC_API_KEY", "").startswith("sk-ant-")
 client = None if DEMO_MODE else anthropic.Anthropic(api_key=os.environ.get("ANTHROPIC_API_KEY"))
@@ -580,6 +584,277 @@ def explain():
 
         except json.JSONDecodeError:
             yield "data: " + json.dumps({"error": "Could not parse AI response. Please try again."}) + "\n\n"
+        except anthropic.APIError as e:
+            yield "data: " + json.dumps({"error": f"AI API error: {str(e)}"}) + "\n\n"
+        except Exception as e:
+            yield "data: " + json.dumps({"error": f"Unexpected error: {str(e)}"}) + "\n\n"
+
+    return Response(
+        stream_with_context(generate()),
+        mimetype="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    )
+
+
+_ALLOWED_IMAGE_TYPES = {"image/jpeg", "image/png", "image/gif", "image/webp"}
+_ALLOWED_VIDEO_EXTS = {".mp4", ".webm", ".mov", ".avi", ".mkv"}
+_ALLOWED_TEXT_EXTS  = {".txt", ".md", ".csv", ".srt", ".vtt"}
+
+
+@app.route("/upload-image", methods=["POST"])
+def upload_image():
+    file = request.files.get("file")
+    if not file or file.filename == "":
+        return {"error": "Please select an image file."}, 400
+
+    mime = file.content_type or mimetypes.guess_type(file.filename)[0] or ""
+    if mime not in _ALLOWED_IMAGE_TYPES:
+        return {"error": "Unsupported type. Please upload a JPEG, PNG, GIF, or WebP image."}, 400
+
+    raw = file.read()
+    if len(raw) > 5 * 1024 * 1024:
+        return {"error": "Image is too large. Maximum size is 5 MB."}, 400
+
+    image_data = base64.standard_b64encode(raw).decode("utf-8")
+    filename = file.filename or "uploaded-image"
+
+    if DEMO_MODE:
+        demo = dict(DEMO_IMAGE_RESULT)
+        demo["video_id"] = filename
+        demo["source_label"] = "uploaded image"
+        return {"result": demo}
+
+    def generate():
+        yield "data: " + json.dumps({"status": "Analysing uploaded image with AI..."}) + "\n\n"
+        full_response = ""
+        try:
+            with client.messages.stream(
+                model="claude-opus-4-6",
+                max_tokens=4096,
+                thinking={"type": "adaptive"},
+                system=IMAGE_SYSTEM_PROMPT,
+                messages=[{
+                    "role": "user",
+                    "content": [
+                        {"type": "image", "source": {"type": "base64", "media_type": mime, "data": image_data}},
+                        {"type": "text", "text": IMAGE_ANALYSIS_PROMPT},
+                    ],
+                }],
+            ) as stream:
+                for text in stream.text_stream:
+                    full_response += text
+
+            clean = full_response.strip()
+            if clean.startswith("```"):
+                clean = re.sub(r"^```[a-z]*\n?", "", clean)
+                clean = re.sub(r"\n?```$", "", clean)
+
+            result = json.loads(clean)
+            result["video_id"] = filename
+            result["language"] = "N/A"
+            result["source_label"] = "uploaded image"
+            yield "data: " + json.dumps({"result": result}) + "\n\n"
+
+        except json.JSONDecodeError:
+            yield "data: " + json.dumps({"error": "Failed to parse AI response. Please try again."}) + "\n\n"
+        except anthropic.APIError as e:
+            yield "data: " + json.dumps({"error": f"AI API error: {str(e)}"}) + "\n\n"
+        except Exception as e:
+            yield "data: " + json.dumps({"error": f"Unexpected error: {str(e)}"}) + "\n\n"
+
+    return Response(
+        stream_with_context(generate()),
+        mimetype="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    )
+
+
+@app.route("/upload-video", methods=["POST"])
+def upload_video():
+    file = request.files.get("file")
+    if not file or file.filename == "":
+        return {"error": "Please select a video file."}, 400
+
+    ext = os.path.splitext(file.filename or "")[1].lower()
+    if ext not in _ALLOWED_VIDEO_EXTS:
+        return {"error": "Unsupported format. Please upload MP4, WebM, MOV, AVI, or MKV."}, 400
+
+    filename = file.filename or "uploaded-video"
+
+    # Save to disk before entering the generator (request object not accessible inside)
+    tmp_fd, tmp_path = tempfile.mkstemp(suffix=ext)
+    try:
+        os.close(tmp_fd)
+        file.save(tmp_path)
+    except Exception as e:
+        try:
+            os.unlink(tmp_path)
+        except OSError:
+            pass
+        return {"error": f"Failed to save uploaded file: {str(e)}"}, 500
+
+    if DEMO_MODE:
+        os.unlink(tmp_path)
+        demo = dict(DEMO_IMAGE_RESULT)
+        demo["video_id"] = filename
+        demo["source_label"] = "uploaded video"
+        return {"result": demo}
+
+    def generate():
+        try:
+            yield "data: " + json.dumps({"status": "Extracting video frames..."}) + "\n\n"
+
+            try:
+                import cv2
+            except ImportError:
+                yield "data: " + json.dumps({"error": "Video processing requires opencv-python. Run: pip install opencv-python"}) + "\n\n"
+                return
+
+            cap = cv2.VideoCapture(tmp_path)
+            if not cap.isOpened():
+                yield "data: " + json.dumps({"error": "Could not open video file. Please check the format."}) + "\n\n"
+                return
+
+            total = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
+            if total < 1:
+                cap.release()
+                yield "data: " + json.dumps({"error": "Could not read frames from this video."}) + "\n\n"
+                return
+
+            n_frames = min(8, total)
+            frames_b64 = []
+            for i in range(n_frames):
+                idx = int(i * total / n_frames)
+                cap.set(cv2.CAP_PROP_POS_FRAMES, idx)
+                ret, frame = cap.read()
+                if ret:
+                    _, buf = cv2.imencode(".jpg", frame, [cv2.IMWRITE_JPEG_QUALITY, 85])
+                    frames_b64.append(base64.standard_b64encode(buf.tobytes()).decode("utf-8"))
+            cap.release()
+
+            if not frames_b64:
+                yield "data: " + json.dumps({"error": "No frames could be extracted from this video."}) + "\n\n"
+                return
+
+            yield "data: " + json.dumps({"status": f"Analysing {len(frames_b64)} video frames with AI..."}) + "\n\n"
+
+            content = []
+            for fb64 in frames_b64:
+                content.append({"type": "image", "source": {"type": "base64", "media_type": "image/jpeg", "data": fb64}})
+            content.append({
+                "type": "text",
+                "text": (
+                    f"These are {len(frames_b64)} keyframes sampled evenly from an uploaded video file "
+                    f"({filename}). Analyse them together to assess the video's content for child safety.\n\n"
+                    + IMAGE_ANALYSIS_PROMPT
+                ),
+            })
+
+            full_response = ""
+            try:
+                with client.messages.stream(
+                    model="claude-opus-4-6",
+                    max_tokens=4096,
+                    thinking={"type": "adaptive"},
+                    system=IMAGE_SYSTEM_PROMPT,
+                    messages=[{"role": "user", "content": content}],
+                ) as stream:
+                    for text in stream.text_stream:
+                        full_response += text
+
+                clean = full_response.strip()
+                if clean.startswith("```"):
+                    clean = re.sub(r"^```[a-z]*\n?", "", clean)
+                    clean = re.sub(r"\n?```$", "", clean)
+
+                result = json.loads(clean)
+                result["video_id"] = filename
+                result["language"] = "N/A"
+                result["source_label"] = f"uploaded video ({len(frames_b64)} frames)"
+                yield "data: " + json.dumps({"result": result}) + "\n\n"
+
+            except json.JSONDecodeError:
+                yield "data: " + json.dumps({"error": "Failed to parse AI response. Please try again."}) + "\n\n"
+            except anthropic.APIError as e:
+                yield "data: " + json.dumps({"error": f"AI API error: {str(e)}"}) + "\n\n"
+            except Exception as e:
+                yield "data: " + json.dumps({"error": f"Unexpected error: {str(e)}"}) + "\n\n"
+
+        finally:
+            if os.path.exists(tmp_path):
+                os.unlink(tmp_path)
+
+    return Response(
+        stream_with_context(generate()),
+        mimetype="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    )
+
+
+@app.route("/upload-text", methods=["POST"])
+def upload_text():
+    file = request.files.get("file")
+    if not file or file.filename == "":
+        return {"error": "Please select a text file."}, 400
+
+    ext = os.path.splitext(file.filename or "")[1].lower()
+    mime = file.content_type or ""
+    if ext not in _ALLOWED_TEXT_EXTS and not mime.startswith("text/"):
+        return {"error": "Unsupported type. Please upload a .txt, .md, .csv, .srt, or .vtt file."}, 400
+
+    filename = file.filename or "uploaded-text"
+
+    try:
+        content = file.read().decode("utf-8", errors="replace")
+    except Exception:
+        return {"error": "Could not read the file. Please ensure it is a plain text file."}, 400
+
+    if not content.strip():
+        return {"error": "The uploaded file appears to be empty."}, 400
+
+    if len(content) > 80000:
+        content = content[:80000] + "\n\n[Content truncated for length]"
+
+    if DEMO_MODE:
+        demo = dict(DEMO_RESULT)
+        demo["video_id"] = filename
+        demo["source_label"] = "uploaded text"
+        return {"result": demo}
+
+    def generate():
+        yield "data: " + json.dumps({"status": "Analysing uploaded text with AI..."}) + "\n\n"
+        full_response = ""
+        try:
+            with client.messages.stream(
+                model="claude-opus-4-6",
+                max_tokens=4096,
+                thinking={"type": "adaptive"},
+                system=SYSTEM_PROMPT,
+                messages=[{
+                    "role": "user",
+                    "content": ANALYSIS_PROMPT.format(
+                        source_label="uploaded text document",
+                        url=filename,
+                        transcript=content,
+                    ),
+                }],
+            ) as stream:
+                for text in stream.text_stream:
+                    full_response += text
+
+            clean = full_response.strip()
+            if clean.startswith("```"):
+                clean = re.sub(r"^```[a-z]*\n?", "", clean)
+                clean = re.sub(r"\n?```$", "", clean)
+
+            result = json.loads(clean)
+            result["video_id"] = filename
+            result["language"] = "unknown"
+            result["source_label"] = "uploaded text"
+            yield "data: " + json.dumps({"result": result}) + "\n\n"
+
+        except json.JSONDecodeError:
+            yield "data: " + json.dumps({"error": "Failed to parse AI response. Please try again."}) + "\n\n"
         except anthropic.APIError as e:
             yield "data: " + json.dumps({"error": f"AI API error: {str(e)}"}) + "\n\n"
         except Exception as e:
