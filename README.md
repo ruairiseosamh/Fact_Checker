@@ -9,7 +9,7 @@ A web app that analyses YouTube videos, uploaded videos, images, text files, and
 ### Video Checker
 - Paste a YouTube URL **or upload a video file** (MP4, WebM, MOV, AVI, MKV) to analyse content
 - **YouTube URL mode** — fetches the video transcript via captions
-- **Upload Video mode** — extracts 8 evenly-spaced keyframes and analyses them visually
+- **Upload Video mode** — transcribes audio with Whisper and extracts 8 evenly-spaced keyframes; Claude analyses both together for a full audio + visual assessment
 - **Upload Text mode** — paste or upload a transcript/script (.txt, .md, .csv, .srt, .vtt) for analysis
 - **Overall safety score** (0–100) with a visual score ring
 - **Age rating** — All Ages, 6+, 9+, 13+, 16+, or 18+
@@ -88,7 +88,8 @@ venv\Scripts\activate           # Windows
 pip install -r requirements.txt
 ```
 
-> `opencv-python` is required for uploaded video frame extraction and will be installed automatically.
+> `opencv-python` and `openai-whisper` are required for video upload support and will be installed automatically.
+> Whisper also requires `ffmpeg` on your system PATH. On macOS: `brew install ffmpeg`.
 
 **4. Add your API key**
 
@@ -142,10 +143,13 @@ Fact_Checker/
 
 **Upload Video mode**
 1. Select a video file (MP4, WebM, MOV, AVI, MKV — up to 100 MB)
-2. The backend saves the file temporarily and uses `opencv-python` to extract 8 evenly-spaced keyframes
-3. The frames are base64-encoded and sent to Claude's vision API as image content blocks
-4. Claude analyses the visual content across all 8 categories
-5. The temp file is deleted immediately after frame extraction
+2. The backend saves the file to a temporary location, then runs two parallel extractions:
+   - **Frames** — `opencv-python` extracts 8 evenly-spaced keyframes, base64-encoded as JPEGs
+   - **Audio** — Whisper transcribes the audio track into text; the detected language is recorded
+3. If transcription succeeds, Claude receives all 8 frames **and** the full transcript in a single message, producing a combined audio + visual assessment
+4. If Whisper or `ffmpeg` is unavailable the analysis falls back to frames only — no error is shown
+5. The temp file is deleted immediately after extraction regardless of outcome
+6. Results stream back in real time and the `source_label` confirms whether a transcript was included (e.g. `uploaded video (8 frames + transcript)` vs `uploaded video (8 frames)`)
 
 **Upload Text mode**
 1. Select a plain text file (.txt, .md, .csv, .srt, .vtt — up to 80,000 characters)
@@ -172,6 +176,59 @@ Fact_Checker/
 
 ---
 
+## Testing
+
+### 1. Verify dependencies
+
+Run these in the activated venv before starting Flask:
+
+```bash
+python -c "import cv2; print('cv2 OK:', cv2.__version__)"
+python -c "import whisper; print('whisper OK')"
+ffmpeg -version | head -1
+```
+
+If `ffmpeg` is missing, Whisper will fail silently and video uploads will fall back to frames-only. Install it with `brew install ffmpeg` on macOS.
+
+### 2. Demo mode (no API key required)
+
+Remove or rename your `.env`, restart Flask, and open [http://localhost:5000](http://localhost:5000). The yellow demo banner should appear. Verify each route returns example output without hitting the API:
+
+| Tab | Input | Expected `source_label` |
+|-----|-------|------------------------|
+| Video Checker → YouTube URL | Any YouTube URL | `YouTube transcript` |
+| Video Checker → Upload Video | Any `.mp4` | `uploaded video` |
+| Video Checker → Upload Text | Any `.txt` | `uploaded text` |
+| Image Analyser → Image URL | Any image URL | `image` |
+| Image Analyser → Upload Image | Any `.jpg` | `uploaded image` |
+| Term Lookup | `blue pill` | _(term hero card)_ |
+
+### 3. Live mode — confirm Whisper is running
+
+Restore your `.env` and restart Flask. Upload a short video file that contains speech. Check two things:
+
+- **Terminal** — on first run, Whisper prints model download progress. On subsequent runs it loads silently in ~1–2 seconds.
+- **Result `source_label`** — `uploaded video (8 frames + transcript)` confirms Whisper succeeded. `uploaded video (8 frames)` means it fell back to frames only; check the Flask terminal for the exception.
+
+### 4. Test graceful Whisper fallback
+
+Add this to `.env` temporarily:
+
+```
+WHISPER_MODEL=does-not-exist
+```
+
+Upload a video — you should still receive a frames-only result, not a 500 error. Remove the line afterwards.
+
+### 5. Edge cases
+
+- Upload a video with no speech → frames-only result, no error
+- Upload an unsupported format (e.g. a `.jpg` renamed to `.mp4`) → clear error from cv2, not a 500
+- Upload a text file over 80,000 characters → truncated silently, analysis still completes
+- Upload an image over 5 MB → `"Image is too large"` error before the API is called
+
+---
+
 ## Notes
 
 - YouTube videos without captions or with disabled transcripts cannot be analysed
@@ -179,6 +236,7 @@ Fact_Checker/
 - Analysis quality depends on transcript accuracy (auto-generated captions can contain errors)
 - Image URLs must point directly to an image file and be publicly accessible
 - Uploaded images are limited to 5 MB (Claude API limit per image)
-- Uploaded video files are limited to 100 MB; frame-based analysis covers visual content only — audio and dialogue are not analysed
+- Uploaded video files are limited to 100 MB; audio is transcribed automatically using Whisper and combined with frame analysis. If Whisper or ffmpeg is unavailable, analysis falls back to frames only
+- Whisper downloads a ~140 MB model (`base`) on first use. Override with `WHISPER_MODEL=tiny` (faster, less accurate) or `WHISPER_MODEL=small`/`medium`/`large` in `.env`. Requires `ffmpeg` on the system PATH (`brew install ffmpeg` on macOS)
 - The AI/Deepfake category analyses transcript, visual, and frame patterns — it cannot perform frame-by-frame forensic video analysis
 - On macOS with pyenv, SSL certificate verification uses the system Keychain via `truststore` to handle corporate proxies
