@@ -596,9 +596,22 @@ def explain():
     )
 
 
+VIDEO_SYSTEM_PROMPT = """You are a child content safety expert. You analyse video content — including visual frames and audio transcripts — and assess how appropriate it is for children. Your analysis must be thorough, evidence-based, and actionable for parents. Cite specific visual elements and transcript quotes when flagging concerns."""
+
 _ALLOWED_IMAGE_TYPES = {"image/jpeg", "image/png", "image/gif", "image/webp"}
 _ALLOWED_VIDEO_EXTS = {".mp4", ".webm", ".mov", ".avi", ".mkv"}
 _ALLOWED_TEXT_EXTS  = {".txt", ".md", ".csv", ".srt", ".vtt"}
+
+_WHISPER_MODEL_NAME = os.environ.get("WHISPER_MODEL", "base")
+_whisper_model = None
+
+
+def get_whisper_model():
+    global _whisper_model
+    if _whisper_model is None:
+        import whisper
+        _whisper_model = whisper.load_model(_WHISPER_MODEL_NAME)
+    return _whisper_model
 
 
 @app.route("/upload-image", methods=["POST"])
@@ -702,6 +715,7 @@ def upload_video():
 
     def generate():
         try:
+            # ── Step 1: extract keyframes ─────────────────────────────────────
             yield "data: " + json.dumps({"status": "Extracting video frames..."}) + "\n\n"
 
             try:
@@ -736,27 +750,62 @@ def upload_video():
                 yield "data: " + json.dumps({"error": "No frames could be extracted from this video."}) + "\n\n"
                 return
 
-            yield "data: " + json.dumps({"status": f"Analysing {len(frames_b64)} video frames with AI..."}) + "\n\n"
+            # ── Step 2: transcribe audio with Whisper ─────────────────────────
+            transcript_text = ""
+            detected_language = "N/A"
+            try:
+                yield "data: " + json.dumps({"status": "Transcribing audio..."}) + "\n\n"
+                model_w = get_whisper_model()
+                whisper_result = model_w.transcribe(tmp_path, task="transcribe")
+                transcript_text = (whisper_result.get("text") or "").strip()
+                detected_language = whisper_result.get("language") or "unknown"
+            except Exception:
+                # Transcription is best-effort — fall back to frames-only if it fails
+                transcript_text = ""
+                detected_language = "N/A"
+
+            # ── Step 3: build Claude content blocks ───────────────────────────
+            has_transcript = bool(transcript_text)
+            if has_transcript:
+                # Cap transcript length to stay within token budget
+                if len(transcript_text) > 60000:
+                    transcript_text = transcript_text[:60000] + "\n\n[Transcript truncated for length]"
+                status_msg = f"Analysing {len(frames_b64)} frames + audio transcript with AI..."
+                text_block = (
+                    f"You are seeing {len(frames_b64)} keyframes sampled evenly from an uploaded video "
+                    f"file ({filename}), along with its full audio transcription below.\n\n"
+                    f"Analyse BOTH the visual content and the dialogue/narration together to produce "
+                    f"a thorough child safety assessment.\n\n"
+                    f"TRANSCRIPT:\n{transcript_text}\n\n"
+                    + IMAGE_ANALYSIS_PROMPT
+                )
+                source_label = f"uploaded video ({len(frames_b64)} frames + transcript)"
+                system = VIDEO_SYSTEM_PROMPT
+            else:
+                status_msg = f"Analysing {len(frames_b64)} video frames with AI..."
+                text_block = (
+                    f"These are {len(frames_b64)} keyframes sampled evenly from an uploaded video file "
+                    f"({filename}). Analyse them together to assess the video's content for child safety.\n\n"
+                    + IMAGE_ANALYSIS_PROMPT
+                )
+                source_label = f"uploaded video ({len(frames_b64)} frames)"
+                system = IMAGE_SYSTEM_PROMPT
+
+            yield "data: " + json.dumps({"status": status_msg}) + "\n\n"
 
             content = []
             for fb64 in frames_b64:
                 content.append({"type": "image", "source": {"type": "base64", "media_type": "image/jpeg", "data": fb64}})
-            content.append({
-                "type": "text",
-                "text": (
-                    f"These are {len(frames_b64)} keyframes sampled evenly from an uploaded video file "
-                    f"({filename}). Analyse them together to assess the video's content for child safety.\n\n"
-                    + IMAGE_ANALYSIS_PROMPT
-                ),
-            })
+            content.append({"type": "text", "text": text_block})
 
+            # ── Step 4: call Claude ───────────────────────────────────────────
             full_response = ""
             try:
                 with client.messages.stream(
                     model="claude-opus-4-6",
                     max_tokens=4096,
                     thinking={"type": "adaptive"},
-                    system=IMAGE_SYSTEM_PROMPT,
+                    system=system,
                     messages=[{"role": "user", "content": content}],
                 ) as stream:
                     for text in stream.text_stream:
@@ -769,8 +818,8 @@ def upload_video():
 
                 result = json.loads(clean)
                 result["video_id"] = filename
-                result["language"] = "N/A"
-                result["source_label"] = f"uploaded video ({len(frames_b64)} frames)"
+                result["language"] = detected_language
+                result["source_label"] = source_label
                 yield "data: " + json.dumps({"result": result}) + "\n\n"
 
             except json.JSONDecodeError:
