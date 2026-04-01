@@ -1,13 +1,16 @@
 # Child Safety Checker
 
-A web app that analyses YouTube videos, images, and online terminology for child-appropriateness using AI. Get an instant breakdown of language, violence, advertising, agenda-pushing, misinformation, AI-generated content, and more — with an overall safety score and parental guidance.
+A web app that analyses YouTube videos, uploaded videos, images, text files, and online terminology for child-appropriateness using AI. Get an instant breakdown of language, violence, advertising, agenda-pushing, misinformation, AI-generated content, and more — with an overall safety score and parental guidance.
 
 ---
 
 ## Features
 
 ### Video Checker
-- Paste a YouTube URL to analyse the video transcript
+- Paste a YouTube URL **or upload a video file** (MP4, WebM, MOV, AVI, MKV) to analyse content
+- **YouTube URL mode** — fetches the video transcript via captions
+- **Upload Video mode** — extracts 8 evenly-spaced keyframes and analyses them visually
+- **Upload Text mode** — paste or upload a transcript/script (.txt, .md, .csv, .srt, .vtt) for analysis
 - **Overall safety score** (0–100) with a visual score ring
 - **Age rating** — All Ages, 6+, 9+, 13+, 16+, or 18+
 - **8 content categories**, each scored and flagged by severity:
@@ -24,7 +27,7 @@ A web app that analyses YouTube videos, images, and online terminology for child
 - **Parental guidance** — specific, actionable advice
 
 ### Image Analyser
-- Paste a direct image URL to analyse it for child safety
+- Paste a direct image URL **or upload an image file** (JPEG, PNG, GIF, WebP, max 5 MB)
 - Same 8-category scoring system, adapted for visual content:
   - Visible text and language
   - Violent or disturbing imagery
@@ -59,6 +62,7 @@ A web app that analyses YouTube videos, images, and online terminology for child
 - An [Anthropic API key](https://console.anthropic.com/settings/keys)
 - YouTube videos must have captions/transcripts enabled
 - Image URLs must be publicly accessible
+- Uploaded video files are processed locally (no third-party transcription service required)
 
 ---
 
@@ -83,6 +87,8 @@ venv\Scripts\activate           # Windows
 ```bash
 pip install -r requirements.txt
 ```
+
+> `opencv-python` is required for uploaded video frame extraction and will be installed automatically.
 
 **4. Add your API key**
 
@@ -118,7 +124,7 @@ Fact_Checker/
 ├── requirements.txt    # Python dependencies
 ├── .env                # API key (not committed to version control)
 └── templates/
-    └── index.html      # Single-page frontend (tabbed UI)
+    └── index.html      # Single-page frontend (tabbed UI with URL and upload modes)
 ```
 
 ---
@@ -126,17 +132,38 @@ Fact_Checker/
 ## How It Works
 
 ### Video Checker
+
+**YouTube URL mode**
 1. Paste a YouTube URL
 2. The backend extracts the video ID and fetches the transcript via `youtube-transcript-api`
 3. The transcript is sent to **Claude Opus 4.6** (with adaptive thinking) for analysis
 4. Claude returns a structured JSON report covering all 8 categories
 5. Results stream back in real time via SSE and render as a visual dashboard
 
+**Upload Video mode**
+1. Select a video file (MP4, WebM, MOV, AVI, MKV — up to 100 MB)
+2. The backend saves the file temporarily and uses `opencv-python` to extract 8 evenly-spaced keyframes
+3. The frames are base64-encoded and sent to Claude's vision API as image content blocks
+4. Claude analyses the visual content across all 8 categories
+5. The temp file is deleted immediately after frame extraction
+
+**Upload Text mode**
+1. Select a plain text file (.txt, .md, .csv, .srt, .vtt — up to 80,000 characters)
+2. The file contents are sent directly to Claude using the same transcript analysis pipeline
+3. Useful for analysing scripts, subtitles, chat logs, or any text-based content
+
 ### Image Analyser
+
+**Image URL mode**
 1. Paste a direct image URL
 2. The image is passed to Claude's **vision API** alongside the analysis prompt
 3. Claude analyses the actual visual content and returns the same structured report
 4. Results stream back and render identically to video results
+
+**Upload Image mode**
+1. Select an image file (JPEG, PNG, GIF, or WebP — up to 5 MB)
+2. The image is base64-encoded in the browser and sent directly to Claude's vision API
+3. Analysis and rendering are identical to URL mode
 
 ### Term Lookup
 1. Type a word or phrase
@@ -148,8 +175,10 @@ Fact_Checker/
 ## Notes
 
 - YouTube videos without captions or with disabled transcripts cannot be analysed
-- Long transcripts are capped at ~80,000 characters to manage token usage
+- Long transcripts and text files are capped at ~80,000 characters to manage token usage
 - Analysis quality depends on transcript accuracy (auto-generated captions can contain errors)
 - Image URLs must point directly to an image file and be publicly accessible
-- The AI/Deepfake category analyses transcript and visual patterns — it cannot perform frame-by-frame forensic video analysis
+- Uploaded images are limited to 5 MB (Claude API limit per image)
+- Uploaded video files are limited to 100 MB; frame-based analysis covers visual content only — audio and dialogue are not analysed
+- The AI/Deepfake category analyses transcript, visual, and frame patterns — it cannot perform frame-by-frame forensic video analysis
 - On macOS with pyenv, SSL certificate verification uses the system Keychain via `truststore` to handle corporate proxies
