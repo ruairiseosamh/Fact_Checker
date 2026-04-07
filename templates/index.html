@@ -544,6 +544,89 @@
 
     .file-label:hover { border-color: var(--accent); background: rgba(99,102,241,0.05); color: var(--text); }
     .file-label.has-file { border-style: solid; border-color: var(--accent); color: var(--text); }
+
+    /* YouTube metadata card */
+    .yt-meta-card {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      padding: 1rem 1.25rem;
+      margin-bottom: 1rem;
+    }
+
+    .yt-meta-title {
+      font-size: 1rem;
+      font-weight: 600;
+      margin-bottom: 0.4rem;
+    }
+
+    .yt-meta-title a { color: var(--text); text-decoration: none; }
+    .yt-meta-title a:hover { color: var(--accent-hover); text-decoration: underline; }
+
+    .yt-meta-stats {
+      font-size: 0.8rem;
+      color: var(--text-muted);
+      display: flex;
+      flex-wrap: wrap;
+      gap: 0.2rem 0;
+    }
+
+    .yt-meta-stats span + span::before { content: " · "; }
+
+    /* Comment analysis card */
+    .comment-analysis-card {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      padding: 1.25rem;
+      margin-bottom: 1.5rem;
+    }
+
+    .comment-analysis-card h3 {
+      font-size: 0.875rem;
+      font-weight: 600;
+      margin-bottom: 0.75rem;
+    }
+
+    .sentiment-badge {
+      display: inline-block;
+      border-radius: 999px;
+      font-size: 0.75rem;
+      font-weight: 700;
+      letter-spacing: 0.04em;
+      padding: 0.2rem 0.75rem;
+      text-transform: uppercase;
+      margin-bottom: 0.75rem;
+    }
+
+    .sentiment-positive       { background: rgba(34,197,94,0.15);  color: #86efac; border: 1px solid rgba(34,197,94,0.3); }
+    .sentiment-mostly_positive { background: rgba(34,197,94,0.1);   color: #86efac; border: 1px solid rgba(34,197,94,0.2); }
+    .sentiment-mixed           { background: rgba(234,179,8,0.15);  color: #fde047; border: 1px solid rgba(234,179,8,0.3); }
+    .sentiment-mostly_negative { background: rgba(249,115,22,0.15); color: #fdba74; border: 1px solid rgba(249,115,22,0.3); }
+    .sentiment-outraged        { background: rgba(239,68,68,0.15);  color: #fca5a5; border: 1px solid rgba(239,68,68,0.3); }
+
+    .comment-summary {
+      font-size: 0.875rem;
+      color: var(--text-muted);
+      line-height: 1.6;
+      margin-bottom: 0.75rem;
+    }
+
+    .comment-patterns {
+      list-style: none;
+      margin-bottom: 0.5rem;
+    }
+
+    .comment-patterns li {
+      font-size: 0.8rem;
+      color: var(--text-muted);
+      padding: 0.2rem 0;
+    }
+
+    .comment-patterns li::before { content: "→ "; color: var(--text-muted); }
+
+    .comment-concerns li::before { content: "⚠ "; color: var(--orange); }
+    .comment-concerns li { color: var(--orange) !important; }
   </style>
 </head>
 <body>
@@ -764,6 +847,54 @@
       return labels[key] || key;
     }
 
+    function buildCommentAnalysisCard(ca) {
+      if (!ca || !ca.sentiment) return "";
+
+      const sentimentLabels = {
+        positive:        "Positive",
+        mostly_positive: "Mostly Positive",
+        mixed:           "Mixed",
+        mostly_negative: "Mostly Negative",
+        outraged:        "Outraged",
+      };
+      const label = sentimentLabels[ca.sentiment] || ca.sentiment;
+      const cls   = "sentiment-" + (ca.sentiment || "mixed");
+
+      const patterns = (ca.patterns || []).map(p => `<li>${escHtml(p)}</li>`).join("");
+      const concerns = (ca.concerns || []).map(c => `<li>${escHtml(c)}</li>`).join("");
+
+      return `
+        <div class="comment-analysis-card">
+          <h3>Comment Section Analysis</h3>
+          <span class="sentiment-badge ${cls}">${label}</span>
+          <p class="comment-summary">${escHtml(ca.summary)}</p>
+          ${patterns ? `<ul class="comment-patterns">${patterns}</ul>` : ""}
+          ${concerns ? `<ul class="comment-patterns comment-concerns">${concerns}</ul>` : ""}
+        </div>`;
+    }
+
+    function formatCount(n) {
+      if (n == null) return "";
+      if (n >= 1000000) return (n / 1000000).toFixed(1).replace(/\.0$/, "") + "M";
+      if (n >= 1000) return (n / 1000).toFixed(1).replace(/\.0$/, "") + "K";
+      return n.toLocaleString();
+    }
+
+    function formatDuration(secs) {
+      const s = Math.floor(secs);
+      const m = Math.floor(s / 60);
+      const h = Math.floor(m / 60);
+      if (h > 0) return `${h}:${String(m % 60).padStart(2, "0")}:${String(s % 60).padStart(2, "0")}`;
+      return `${m}:${String(s % 60).padStart(2, "0")}`;
+    }
+
+    function formatDate(dateStr) {
+      if (!dateStr) return "";
+      try {
+        return new Date(dateStr).toLocaleDateString("en-GB", { day: "numeric", month: "short", year: "numeric" });
+      } catch { return dateStr; }
+    }
+
     function buildRing(score) {
       const r = 54;
       const circ = 2 * Math.PI * r;
@@ -815,7 +946,23 @@
         ? `<span>${escHtml(r.video_id)}</span>`
         : `<a href="${escHtml(currentUrl)}" target="_blank" rel="noopener noreferrer">${escHtml(r.video_id)}</a>`;
 
+      const ytMetaHtml = r.yt_title ? `
+        <div class="yt-meta-card">
+          <div class="yt-meta-title">
+            <a href="${escHtml(currentUrl)}" target="_blank" rel="noopener noreferrer">${escHtml(r.yt_title)}</a>
+          </div>
+          <div class="yt-meta-stats">
+            ${r.yt_channel    ? `<span>${escHtml(r.yt_channel)}</span>` : ""}
+            ${r.yt_upload_date ? `<span>${formatDate(r.yt_upload_date)}</span>` : ""}
+            ${r.yt_views  != null ? `<span>${formatCount(r.yt_views)} views</span>` : ""}
+            ${r.yt_likes  != null ? `<span>${formatCount(r.yt_likes)} likes</span>` : ""}
+            ${r.yt_duration   ? `<span>${formatDuration(r.yt_duration)}</span>` : ""}
+            ${r.yt_comments_count ? `<span>${r.yt_comments_count} comments analysed</span>` : ""}
+          </div>
+        </div>` : "";
+
       resultsEl.innerHTML = `
+        ${ytMetaHtml}
         <div class="video-meta">
           ${metaIdHtml}
           &nbsp;·&nbsp; ${sourceLabel}
@@ -836,6 +983,8 @@
           </div>
           <p class="summary-text">${escHtml(r.summary)}</p>
         </div>
+
+        ${buildCommentAnalysisCard(r.comment_analysis)}
 
         <p class="section-title">Category Breakdown</p>
         <div class="categories">${categoryCards}</div>
