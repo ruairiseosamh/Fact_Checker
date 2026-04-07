@@ -93,8 +93,30 @@ DEMO_RESULT = {
         "the sponsored content and help contextualise the one-sided viewpoints expressed. "
         "Use it as an opportunity to talk about media literacy and advertising."
     ),
+    "comment_analysis": {
+        "sentiment": "mostly_positive",
+        "summary": (
+            "Most viewers respond positively and find the content educational and engaging. "
+            "A vocal minority raise concerns about the accuracy of one statistic cited in the video "
+            "and express mild frustration at the sponsor segment."
+        ),
+        "patterns": [
+            "Parents commenting that their children enjoy the content",
+            "Viewers requesting follow-up videos on related topics",
+            "Several comments questioning an unverified statistic",
+            "Mixed reactions to the sponsored segment",
+        ],
+        "concerns": [],
+    },
     "video_id": "dQw4w9WgXcQ",
     "language": "English",
+    "yt_title": "How Technology is Changing Education (Demo)",
+    "yt_channel": "Learning Channel",
+    "yt_upload_date": "2024-02-20",
+    "yt_views": 1234567,
+    "yt_likes": 45678,
+    "yt_duration": 847,
+    "yt_comments_count": 15,
     "is_demo": True,
 }
 
@@ -223,6 +245,111 @@ Respond ONLY with a valid JSON object matching this exact schema:
 If the term has no meaningful child safety relevance, set risk_level to "none" and explain that clearly in the fields. Be accurate, non-alarmist, and practically helpful for parents."""
 
 
+def get_youtube_extras(video_id: str) -> dict:
+    """Fetch video metadata and top comments via yt-dlp.
+
+    Metadata and comments are fetched separately so a comment fetch failure
+    (common on restricted networks) does not discard the metadata.
+    """
+    try:
+        import yt_dlp
+    except ImportError:
+        return {}
+
+    url = f"https://www.youtube.com/watch?v={video_id}"
+    base_opts = {"quiet": True, "no_warnings": True, "skip_download": True}
+
+    # ── Step 1: metadata (always attempted) ──────────────────────────────────
+    info = None
+    try:
+        with yt_dlp.YoutubeDL(base_opts) as ydl:
+            info = ydl.extract_info(url, download=False)
+    except Exception:
+        return {}
+
+    if not info:
+        return {}
+
+    raw_date = info.get("upload_date") or ""
+    upload_date = f"{raw_date[:4]}-{raw_date[4:6]}-{raw_date[6:8]}" if len(raw_date) == 8 else raw_date
+
+    extras = {
+        "title":       info.get("title") or "",
+        "channel":     info.get("channel") or info.get("uploader") or "",
+        "upload_date": upload_date,
+        "view_count":  info.get("view_count"),
+        "like_count":  info.get("like_count"),
+        "duration":    info.get("duration"),
+        "description": (info.get("description") or "")[:800],
+        "tags":        (info.get("tags") or [])[:20],
+        "comments":    [],
+    }
+
+    # ── Step 2: comments (best-effort; silently skipped on failure) ───────────
+    comment_opts = {
+        **base_opts,
+        "getcomments": True,
+        "extractor_args": {"youtube": {"max_comments": ["15"]}},
+    }
+    try:
+        with yt_dlp.YoutubeDL(comment_opts) as ydl:
+            info_with_comments = ydl.extract_info(url, download=False)
+
+        raw_comments = sorted(
+            (info_with_comments or {}).get("comments") or [],
+            key=lambda c: c.get("like_count") or 0,
+            reverse=True,
+        )
+        extras["comments"] = [
+            {
+                "text":   (c.get("text") or "")[:500],
+                "author": c.get("author") or "Unknown",
+                "likes":  c.get("like_count") or 0,
+            }
+            for c in raw_comments[:15]
+            if c.get("text")
+        ]
+    except Exception:
+        pass  # metadata already captured above; comment analysis just won't appear
+
+    return extras
+
+
+def format_extras_section(extras: dict) -> str:
+    """Build the metadata + comments block to inject into the analysis prompt."""
+    if not extras:
+        return ""
+
+    lines = ["VIDEO METADATA:"]
+    if extras.get("title"):
+        lines.append(f"- Title: {extras['title']}")
+    if extras.get("channel"):
+        lines.append(f"- Channel: {extras['channel']}")
+    if extras.get("upload_date"):
+        lines.append(f"- Published: {extras['upload_date']}")
+    if extras.get("view_count") is not None:
+        lines.append(f"- Views: {extras['view_count']:,}")
+    if extras.get("like_count") is not None:
+        lines.append(f"- Likes: {extras['like_count']:,}")
+    if extras.get("duration") is not None:
+        secs = int(extras["duration"])
+        lines.append(f"- Duration: {secs // 60}:{secs % 60:02d}")
+    if extras.get("description"):
+        lines.append(f"- Description: {extras['description']}")
+    if extras.get("tags"):
+        lines.append(f"- Tags: {', '.join(extras['tags'])}")
+
+    comments = extras.get("comments") or []
+    if comments:
+        lines.append("")
+        lines.append(f"TOP COMMENTS ({len(comments)} shown, sorted by likes):")
+        for i, c in enumerate(comments, 1):
+            likes_str = f" ({c['likes']} likes)" if c["likes"] else ""
+            lines.append(f'{i}. {c["author"]}{likes_str}: "{c["text"]}"')
+
+    return "\n".join(lines) + "\n\n"
+
+
 def extract_video_id(url: str) -> Optional[str]:
     """Extract YouTube video ID from various URL formats."""
     for pattern in [r"(?:v=|youtu\.be/|embed/|shorts/)([a-zA-Z0-9_-]{11})"]:
@@ -265,7 +392,7 @@ ANALYSIS_PROMPT = """Analyse the following content and produce a detailed child-
 
 SOURCE: {source_label}
 URL: {url}
-CONTENT:
+{extras_section}CONTENT:
 {transcript}
 
 Produce your report in the following JSON format (output ONLY valid JSON, no markdown, no preamble):
@@ -327,7 +454,7 @@ Produce your report in the following JSON format (output ONLY valid JSON, no mar
   "positives": [<list of genuinely positive aspects for children, e.g. educational value, positive role models>],
   "red_flags": [<list of the most important concerns parents should know about>],
   "parental_guidance": "<specific, actionable advice for parents>"
-}}"""
+}}{comment_schema_hint}"""
 
 
 @app.route("/")
@@ -368,6 +495,28 @@ def analyse():
         content = content[:80000] + "\n\n[Content truncated for length]"
 
     def generate():
+        # Fetch metadata + comments (yt-dlp); silently skip if unavailable
+        yield "data: " + json.dumps({"status": "Fetching video metadata and comments..."}) + "\n\n"
+        extras = {}
+        try:
+            extras = get_youtube_extras(video_id)
+        except Exception:
+            pass
+
+        extras_section = format_extras_section(extras)
+
+        comment_schema_hint = ""
+        if extras.get("comments"):
+            comment_schema_hint = """
+
+Additionally, since TOP COMMENTS were provided above, add a "comment_analysis" field to your JSON:
+  "comment_analysis": {
+    "sentiment": "<one of: positive | mostly_positive | mixed | mostly_negative | outraged>",
+    "summary": "<2-3 sentence description of the overall commenter mood and what people are typically saying>",
+    "patterns": [<list of notable themes or talking points visible in the comments>],
+    "concerns": [<child safety concerns visible in the comment section itself — e.g. grooming language, suspicious accounts, radicalising replies — or empty list if none>]
+  }"""
+
         yield "data: " + json.dumps({"status": f"Analysing {source_label} with AI..."}) + "\n\n"
 
         full_response = ""
@@ -383,6 +532,8 @@ def analyse():
                         "content": ANALYSIS_PROMPT.format(
                             source_label=source_label,
                             url=url,
+                            extras_section=extras_section,
+                            comment_schema_hint=comment_schema_hint,
                             transcript=content,
                         ),
                     }
@@ -400,6 +551,14 @@ def analyse():
             result["video_id"] = display_id
             result["language"] = language
             result["source_label"] = source_label
+            if extras:
+                result["yt_title"]          = extras.get("title", "")
+                result["yt_channel"]        = extras.get("channel", "")
+                result["yt_upload_date"]    = extras.get("upload_date", "")
+                result["yt_views"]          = extras.get("view_count")
+                result["yt_likes"]          = extras.get("like_count")
+                result["yt_duration"]       = extras.get("duration")
+                result["yt_comments_count"] = len(extras.get("comments") or [])
             yield "data: " + json.dumps({"result": result}) + "\n\n"
 
         except json.JSONDecodeError:
