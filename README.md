@@ -240,3 +240,4 @@ Upload a video — you should still receive a frames-only result, not a 500 erro
 - Whisper downloads a ~140 MB model (`base`) on first use. Override with `WHISPER_MODEL=tiny` (faster, less accurate) or `WHISPER_MODEL=small`/`medium`/`large` in `.env`. Requires `ffmpeg` on the system PATH (`brew install ffmpeg` on macOS)
 - The AI/Deepfake category analyses transcript, visual, and frame patterns — it cannot perform frame-by-frame forensic video analysis
 - On macOS with pyenv, SSL certificate verification uses the system Keychain via `truststore` to handle corporate proxies
+ 
