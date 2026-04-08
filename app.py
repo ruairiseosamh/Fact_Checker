@@ -95,6 +95,12 @@ DEMO_RESULT = {
     ),
     "video_id": "dQw4w9WgXcQ",
     "language": "English",
+    "yt_title": "How Technology is Changing Education (Demo)",
+    "yt_channel": "Learning Channel",
+    "yt_upload_date": "2024-02-20",
+    "yt_views": 1234567,
+    "yt_likes": 45678,
+    "yt_duration": 847,
     "is_demo": True,
 }
 
@@ -223,6 +229,71 @@ Respond ONLY with a valid JSON object matching this exact schema:
 If the term has no meaningful child safety relevance, set risk_level to "none" and explain that clearly in the fields. Be accurate, non-alarmist, and practically helpful for parents."""
 
 
+def get_youtube_extras(video_id: str) -> dict:
+    """Fetch video metadata and top comments via yt-dlp.
+
+    Metadata and comments are fetched separately so a comment fetch failure
+    (common on restricted networks) does not discard the metadata.
+    """
+    try:
+        import yt_dlp
+    except ImportError:
+        return {}
+
+    url = f"https://www.youtube.com/watch?v={video_id}"
+    ydl_opts = {"quiet": True, "no_warnings": True, "skip_download": True}
+
+    try:
+        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+            info = ydl.extract_info(url, download=False)
+    except Exception:
+        return {}
+
+    if not info:
+        return {}
+
+    raw_date = info.get("upload_date") or ""
+    upload_date = f"{raw_date[:4]}-{raw_date[4:6]}-{raw_date[6:8]}" if len(raw_date) == 8 else raw_date
+
+    return {
+        "title":       info.get("title") or "",
+        "channel":     info.get("channel") or info.get("uploader") or "",
+        "upload_date": upload_date,
+        "view_count":  info.get("view_count"),
+        "like_count":  info.get("like_count"),
+        "duration":    info.get("duration"),
+        "description": (info.get("description") or "")[:800],
+        "tags":        (info.get("tags") or [])[:20],
+    }
+
+
+def format_extras_section(extras: dict) -> str:
+    """Build the metadata + comments block to inject into the analysis prompt."""
+    if not extras:
+        return ""
+
+    lines = ["VIDEO METADATA:"]
+    if extras.get("title"):
+        lines.append(f"- Title: {extras['title']}")
+    if extras.get("channel"):
+        lines.append(f"- Channel: {extras['channel']}")
+    if extras.get("upload_date"):
+        lines.append(f"- Published: {extras['upload_date']}")
+    if extras.get("view_count") is not None:
+        lines.append(f"- Views: {extras['view_count']:,}")
+    if extras.get("like_count") is not None:
+        lines.append(f"- Likes: {extras['like_count']:,}")
+    if extras.get("duration") is not None:
+        secs = int(extras["duration"])
+        lines.append(f"- Duration: {secs // 60}:{secs % 60:02d}")
+    if extras.get("description"):
+        lines.append(f"- Description: {extras['description']}")
+    if extras.get("tags"):
+        lines.append(f"- Tags: {', '.join(extras['tags'])}")
+
+    return "\n".join(lines) + "\n\n"
+
+
 def extract_video_id(url: str) -> Optional[str]:
     """Extract YouTube video ID from various URL formats."""
     for pattern in [r"(?:v=|youtu\.be/|embed/|shorts/)([a-zA-Z0-9_-]{11})"]:
@@ -257,6 +328,14 @@ def get_youtube_content(video_id: str) -> Tuple[str, str, str]:
 
 
 
+_CHILD_MODE_INSTRUCTION = (
+    "\n\nAUDIENCE MODE — CHILD: The person reading this result is a child (aged 8-12). "
+    "Write ALL text fields (summary, every category details field, parental_guidance) in simple, "
+    "friendly, non-alarming language they can understand. Avoid jargon, graphic descriptions, and "
+    "adult framing. The parental_guidance field should gently encourage the child to chat with a "
+    "parent about anything they noticed."
+)
+
 SYSTEM_PROMPT = """You are a child content safety expert. You analyse online content and assess how appropriate it is for children.
 
 Your analysis must be thorough, evidence-based, and actionable for parents. Always cite specific examples from the content when flagging concerns."""
@@ -265,7 +344,7 @@ ANALYSIS_PROMPT = """Analyse the following content and produce a detailed child-
 
 SOURCE: {source_label}
 URL: {url}
-CONTENT:
+{extras_section}CONTENT:
 {transcript}
 
 Produce your report in the following JSON format (output ONLY valid JSON, no markdown, no preamble):
@@ -344,6 +423,8 @@ def analyse():
     if not url.startswith(("http://", "https://")):
         url = "https://" + url
 
+    child_mode = bool(request.json.get("child_mode", False))
+
     # Extract video ID and fetch transcript
     video_id = extract_video_id(url)
     if not video_id:
@@ -361,28 +442,41 @@ def analyse():
         demo["video_id"] = display_id
         demo["language"] = language
         demo["source_label"] = source_label
+        demo["is_child_mode"] = child_mode
         return {"result": demo}
 
     # Truncate to avoid excessive token usage (~80k chars ≈ ~20k tokens)
     if len(content) > 80000:
         content = content[:80000] + "\n\n[Content truncated for length]"
 
+    system = SYSTEM_PROMPT + (_CHILD_MODE_INSTRUCTION if child_mode else "")
+
     def generate():
+        # Fetch metadata (yt-dlp); silently skip if unavailable
+        yield "data: " + json.dumps({"status": "Fetching video metadata..."}) + "\n\n"
+        extras = {}
+        try:
+            extras = get_youtube_extras(video_id)
+        except Exception:
+            pass
+
+        extras_section = format_extras_section(extras)
+
         yield "data: " + json.dumps({"status": f"Analysing {source_label} with AI..."}) + "\n\n"
 
         full_response = ""
         try:
             with client.messages.stream(
-                model="claude-opus-4-6",
+                model="claude-sonnet-4-6",
                 max_tokens=4096,
-                thinking={"type": "adaptive"},
-                system=SYSTEM_PROMPT,
+                system=system,
                 messages=[
                     {
                         "role": "user",
                         "content": ANALYSIS_PROMPT.format(
                             source_label=source_label,
                             url=url,
+                            extras_section=extras_section,
                             transcript=content,
                         ),
                     }
@@ -400,6 +494,14 @@ def analyse():
             result["video_id"] = display_id
             result["language"] = language
             result["source_label"] = source_label
+            if extras:
+                result["yt_title"]       = extras.get("title", "")
+                result["yt_channel"]     = extras.get("channel", "")
+                result["yt_upload_date"] = extras.get("upload_date", "")
+                result["yt_views"]       = extras.get("view_count")
+                result["yt_likes"]       = extras.get("like_count")
+                result["yt_duration"]    = extras.get("duration")
+            result["is_child_mode"]  = child_mode
             yield "data: " + json.dumps({"result": result}) + "\n\n"
 
         except json.JSONDecodeError:
@@ -495,13 +597,19 @@ def analyse_image():
     if not image_url.startswith(("http://", "https://")):
         image_url = "https://" + image_url
 
+    child_mode = bool(request.json.get("child_mode", False))
+
     if DEMO_MODE:
-        return {"result": dict(DEMO_IMAGE_RESULT)}
+        demo = dict(DEMO_IMAGE_RESULT)
+        demo["is_child_mode"] = child_mode
+        return {"result": demo}
 
     # Use the filename portion of the URL as the display ID
     from urllib.parse import urlparse
     path = urlparse(image_url).path
     display_id = path.split("/")[-1] or urlparse(image_url).netloc
+
+    image_system = IMAGE_SYSTEM_PROMPT + (_CHILD_MODE_INSTRUCTION if child_mode else "")
 
     def generate():
         yield "data: " + json.dumps({"status": "Analysing image with AI..."}) + "\n\n"
@@ -509,10 +617,9 @@ def analyse_image():
         full_response = ""
         try:
             with client.messages.stream(
-                model="claude-opus-4-6",
+                model="claude-sonnet-4-6",
                 max_tokens=4096,
-                thinking={"type": "adaptive"},
-                system=IMAGE_SYSTEM_PROMPT,
+                system=image_system,
                 messages=[{
                     "role": "user",
                     "content": [
@@ -533,6 +640,7 @@ def analyse_image():
             result["video_id"] = display_id
             result["language"] = "N/A"
             result["source_label"] = "image"
+            result["is_child_mode"] = child_mode
             yield "data: " + json.dumps({"result": result}) + "\n\n"
 
         except json.JSONDecodeError:
@@ -564,9 +672,8 @@ def explain():
         full_response = ""
         try:
             with client.messages.stream(
-                model="claude-opus-4-6",
+                model="claude-sonnet-4-6",
                 max_tokens=16000,
-                thinking={"type": "adaptive"},
                 system=TERM_SYSTEM_PROMPT,
                 messages=[{"role": "user", "content": TERM_LOOKUP_PROMPT.format(term=term)}],
             ) as stream:
@@ -620,6 +727,8 @@ def upload_image():
     if not file or file.filename == "":
         return {"error": "Please select an image file."}, 400
 
+    child_mode = request.form.get("child_mode") == "true"
+
     mime = file.content_type or mimetypes.guess_type(file.filename)[0] or ""
     if mime not in _ALLOWED_IMAGE_TYPES:
         return {"error": "Unsupported type. Please upload a JPEG, PNG, GIF, or WebP image."}, 400
@@ -635,17 +744,19 @@ def upload_image():
         demo = dict(DEMO_IMAGE_RESULT)
         demo["video_id"] = filename
         demo["source_label"] = "uploaded image"
+        demo["is_child_mode"] = child_mode
         return {"result": demo}
+
+    upload_image_system = IMAGE_SYSTEM_PROMPT + (_CHILD_MODE_INSTRUCTION if child_mode else "")
 
     def generate():
         yield "data: " + json.dumps({"status": "Analysing uploaded image with AI..."}) + "\n\n"
         full_response = ""
         try:
             with client.messages.stream(
-                model="claude-opus-4-6",
+                model="claude-sonnet-4-6",
                 max_tokens=4096,
-                thinking={"type": "adaptive"},
-                system=IMAGE_SYSTEM_PROMPT,
+                system=upload_image_system,
                 messages=[{
                     "role": "user",
                     "content": [
@@ -666,6 +777,7 @@ def upload_image():
             result["video_id"] = filename
             result["language"] = "N/A"
             result["source_label"] = "uploaded image"
+            result["is_child_mode"] = child_mode
             yield "data: " + json.dumps({"result": result}) + "\n\n"
 
         except json.JSONDecodeError:
@@ -693,6 +805,7 @@ def upload_video():
         return {"error": "Unsupported format. Please upload MP4, WebM, MOV, AVI, or MKV."}, 400
 
     filename = file.filename or "uploaded-video"
+    child_mode = request.form.get("child_mode") == "true"
 
     # Save to disk before entering the generator (request object not accessible inside)
     tmp_fd, tmp_path = tempfile.mkstemp(suffix=ext)
@@ -711,6 +824,7 @@ def upload_video():
         demo = dict(DEMO_IMAGE_RESULT)
         demo["video_id"] = filename
         demo["source_label"] = "uploaded video"
+        demo["is_child_mode"] = child_mode
         return {"result": demo}
 
     def generate():
@@ -780,7 +894,7 @@ def upload_video():
                     + IMAGE_ANALYSIS_PROMPT
                 )
                 source_label = f"uploaded video ({len(frames_b64)} frames + transcript)"
-                system = VIDEO_SYSTEM_PROMPT
+                system = VIDEO_SYSTEM_PROMPT + (_CHILD_MODE_INSTRUCTION if child_mode else "")
             else:
                 status_msg = f"Analysing {len(frames_b64)} video frames with AI..."
                 text_block = (
@@ -789,7 +903,7 @@ def upload_video():
                     + IMAGE_ANALYSIS_PROMPT
                 )
                 source_label = f"uploaded video ({len(frames_b64)} frames)"
-                system = IMAGE_SYSTEM_PROMPT
+                system = IMAGE_SYSTEM_PROMPT + (_CHILD_MODE_INSTRUCTION if child_mode else "")
 
             yield "data: " + json.dumps({"status": status_msg}) + "\n\n"
 
@@ -802,7 +916,7 @@ def upload_video():
             full_response = ""
             try:
                 with client.messages.stream(
-                    model="claude-opus-4-6",
+                    model="claude-sonnet-4-6",
                     max_tokens=4096,
                     thinking={"type": "adaptive"},
                     system=system,
@@ -820,6 +934,7 @@ def upload_video():
                 result["video_id"] = filename
                 result["language"] = detected_language
                 result["source_label"] = source_label
+                result["is_child_mode"] = child_mode
                 yield "data: " + json.dumps({"result": result}) + "\n\n"
 
             except json.JSONDecodeError:
@@ -852,6 +967,7 @@ def upload_text():
         return {"error": "Unsupported type. Please upload a .txt, .md, .csv, .srt, or .vtt file."}, 400
 
     filename = file.filename or "uploaded-text"
+    child_mode = request.form.get("child_mode") == "true"
 
     try:
         content = file.read().decode("utf-8", errors="replace")
@@ -868,22 +984,25 @@ def upload_text():
         demo = dict(DEMO_RESULT)
         demo["video_id"] = filename
         demo["source_label"] = "uploaded text"
+        demo["is_child_mode"] = child_mode
         return {"result": demo}
+
+    text_system = SYSTEM_PROMPT + (_CHILD_MODE_INSTRUCTION if child_mode else "")
 
     def generate():
         yield "data: " + json.dumps({"status": "Analysing uploaded text with AI..."}) + "\n\n"
         full_response = ""
         try:
             with client.messages.stream(
-                model="claude-opus-4-6",
+                model="claude-sonnet-4-6",
                 max_tokens=4096,
-                thinking={"type": "adaptive"},
-                system=SYSTEM_PROMPT,
+                system=text_system,
                 messages=[{
                     "role": "user",
                     "content": ANALYSIS_PROMPT.format(
                         source_label="uploaded text document",
                         url=filename,
+                        extras_section="",
                         transcript=content,
                     ),
                 }],
@@ -900,6 +1019,7 @@ def upload_text():
             result["video_id"] = filename
             result["language"] = "unknown"
             result["source_label"] = "uploaded text"
+            result["is_child_mode"] = child_mode
             yield "data: " + json.dumps({"result": result}) + "\n\n"
 
         except json.JSONDecodeError:
