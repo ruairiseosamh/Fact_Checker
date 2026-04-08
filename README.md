@@ -1,6 +1,6 @@
 # Child Safety Checker
 
-A web app that analyses YouTube videos, uploaded videos, images, text files, and online terminology for child-appropriateness using AI. Get an instant breakdown of language, violence, advertising, agenda-pushing, misinformation, AI-generated content, and more — with an overall safety score and parental guidance.
+A web app that analyses YouTube videos, uploaded videos, images, text files, and online terminology for child-appropriateness using AI. Get an instant breakdown of language, violence, advertising, agenda-pushing, misinformation, AI-generated content, and more — with an overall safety score and parental guidance. Results can be tailored for a parent or a child audience at the click of a toggle.
 
 ---
 
@@ -8,12 +8,12 @@ A web app that analyses YouTube videos, uploaded videos, images, text files, and
 
 ### Video Checker
 - Paste a YouTube URL **or upload a video file** (MP4, WebM, MOV, AVI, MKV) to analyse content
-- **YouTube URL mode** — fetches the video transcript via captions
+- **YouTube URL mode** — fetches the video transcript and enriches analysis with video metadata (title, channel, views, likes, duration, description, tags) via `yt-dlp`
 - **Upload Video mode** — transcribes audio with Whisper and extracts 8 evenly-spaced keyframes; Claude analyses both together for a full audio + visual assessment
 - **Upload Text mode** — paste or upload a transcript/script (.txt, .md, .csv, .srt, .vtt) for analysis
 - **Overall safety score** (0–100) with a visual score ring
 - **Age rating** — All Ages, 6+, 9+, 13+, 16+, or 18+
-- **8 content categories**, each scored and flagged by severity:
+- **8 content categories**, each scored and flagged by severity (collapsed by default; moderate/severe auto-expand):
   - Language (profanity, offensive terms)
   - Violence
   - Adult themes (sex, drugs, alcohol)
@@ -50,6 +50,7 @@ A web app that analyses YouTube videos, uploaded videos, images, text files, and
   - Parental guidance
 
 ### General
+- **Audience toggle** — select **Parent** or **Child** before analysing; Claude tailors all language and framing to the chosen audience in a single API call
 - **Demo mode** — shows realistic example results when no API key is configured
 - Real-time **streaming analysis** via Server-Sent Events
 - Dark-themed, responsive single-page UI
@@ -88,7 +89,8 @@ venv\Scripts\activate           # Windows
 pip install -r requirements.txt
 ```
 
-> `opencv-python` and `openai-whisper` are required for video upload support and will be installed automatically.
+> `opencv-python` and `openai-whisper` are required for video upload support and will be installed automatically.  
+> `yt-dlp` is required for YouTube metadata enrichment and will be installed automatically.  
 > Whisper also requires `ffmpeg` on your system PATH. On macOS: `brew install ffmpeg`.
 
 **4. Add your API key**
@@ -135,11 +137,12 @@ Fact_Checker/
 ### Video Checker
 
 **YouTube URL mode**
-1. Paste a YouTube URL
+1. Paste a YouTube URL and select your audience (Parent or Child)
 2. The backend extracts the video ID and fetches the transcript via `youtube-transcript-api`
-3. The transcript is sent to **Claude Opus 4.6** (with adaptive thinking) for analysis
-4. Claude returns a structured JSON report covering all 8 categories
-5. Results stream back in real time via SSE and render as a visual dashboard
+3. Video metadata (title, channel, views, likes, duration, description, tags) is fetched via `yt-dlp` and injected into the analysis prompt; the metadata card is shown above the results
+4. The transcript and metadata are sent to **Claude Sonnet 4.6** for analysis
+5. Claude returns a structured JSON report covering all 8 categories, written in language appropriate for the selected audience
+6. Results stream back in real time via SSE and render as a visual dashboard
 
 **Upload Video mode**
 1. Select a video file (MP4, WebM, MOV, AVI, MKV — up to 100 MB)
@@ -155,6 +158,15 @@ Fact_Checker/
 1. Select a plain text file (.txt, .md, .csv, .srt, .vtt — up to 80,000 characters)
 2. The file contents are sent directly to Claude using the same transcript analysis pipeline
 3. Useful for analysing scripts, subtitles, chat logs, or any text-based content
+
+### Audience Mode
+
+Before running any analysis, set the **Audience** toggle in the input card to **Parent** or **Child**:
+
+- **Parent** (default) — detailed, technical language aimed at adults making informed decisions about content
+- **Child** — all text fields (summary, category details, guidance) are rewritten by Claude in simple, friendly, non-alarming language suitable for an 8-12 year old; the guidance section is reframed as "Worth chatting to your parents about"
+
+The preference is saved locally and persists between sessions. A **Child Mode** badge appears on results to confirm which audience the analysis was written for.
 
 ### Image Analyser
 
@@ -203,6 +215,8 @@ Remove or rename your `.env`, restart Flask, and open [http://localhost:5000](ht
 | Image Analyser → Upload Image | Any `.jpg` | `uploaded image` |
 | Term Lookup | `blue pill` | _(term hero card)_ |
 
+Set the Audience toggle to **Child** before submitting — the result should show a **Child Mode** badge and the guidance section heading should read "Worth chatting to your parents about".
+
 ### 3. Live mode — confirm Whisper is running
 
 Restore your `.env` and restart Flask. Upload a short video file that contains speech. Check two things:
@@ -238,5 +252,7 @@ Upload a video — you should still receive a frames-only result, not a 500 erro
 - Uploaded images are limited to 5 MB (Claude API limit per image)
 - Uploaded video files are limited to 100 MB; audio is transcribed automatically using Whisper and combined with frame analysis. If Whisper or ffmpeg is unavailable, analysis falls back to frames only
 - Whisper downloads a ~140 MB model (`base`) on first use. Override with `WHISPER_MODEL=tiny` (faster, less accurate) or `WHISPER_MODEL=small`/`medium`/`large` in `.env`. Requires `ffmpeg` on the system PATH (`brew install ffmpeg` on macOS)
+- YouTube metadata (title, channel, views, etc.) is fetched via `yt-dlp` and shown in a card above the results; if `yt-dlp` is unavailable or the network blocks the request the metadata card is simply omitted and analysis continues using the transcript alone
+- The Audience toggle preference is stored in `localStorage` — it persists across browser sessions on the same device
 - The AI/Deepfake category analyses transcript, visual, and frame patterns — it cannot perform frame-by-frame forensic video analysis
 - On macOS with pyenv, SSL certificate verification uses the system Keychain via `truststore` to handle corporate proxies
