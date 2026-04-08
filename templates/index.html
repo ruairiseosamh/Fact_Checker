@@ -255,10 +255,36 @@
       transition: width 0.6s ease;
     }
 
+    .category-card {
+      cursor: pointer;
+      user-select: none;
+    }
+
+    .category-card:hover { border-color: var(--accent); }
+
+    .category-chevron {
+      display: inline-block;
+      font-size: 0.75rem;
+      color: var(--text-muted);
+      transition: transform 0.2s ease;
+      line-height: 1;
+    }
+
+    .category-card.open .category-chevron { transform: rotate(180deg); }
+
+    .category-details-wrapper {
+      max-height: 0;
+      overflow: hidden;
+      transition: max-height 0.3s ease;
+    }
+
+    .category-card.open .category-details-wrapper { max-height: 400px; }
+
     .category-details {
       font-size: 0.8rem;
       color: var(--text-muted);
       line-height: 1.5;
+      padding-top: 0.5rem;
     }
 
     .examples-list {
@@ -544,6 +570,70 @@
 
     .file-label:hover { border-color: var(--accent); background: rgba(99,102,241,0.05); color: var(--text); }
     .file-label.has-file { border-style: solid; border-color: var(--accent); color: var(--text); }
+
+    /* YouTube metadata card */
+    .yt-meta-card {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      padding: 1rem 1.25rem;
+      margin-bottom: 1rem;
+    }
+
+    .yt-meta-title {
+      font-size: 1rem;
+      font-weight: 600;
+      margin-bottom: 0.4rem;
+    }
+
+    .yt-meta-title a { color: var(--text); text-decoration: none; }
+    .yt-meta-title a:hover { color: var(--accent-hover); text-decoration: underline; }
+
+    .yt-meta-stats {
+      font-size: 0.8rem;
+      color: var(--text-muted);
+      display: flex;
+      flex-wrap: wrap;
+      gap: 0.2rem 0;
+    }
+
+    .yt-meta-stats span + span::before { content: " · "; }
+
+    /* Child / Parent view toggle */
+    .view-toggle-row {
+      display: flex;
+      align-items: center;
+      justify-content: flex-end;
+      gap: 0.6rem;
+      margin-bottom: 1.25rem;
+    }
+
+    .view-toggle-label { font-size: 0.8rem; color: var(--text-muted); }
+
+    .view-toggle {
+      display: flex;
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 3px;
+      gap: 3px;
+    }
+
+    .view-btn {
+      background: transparent;
+      border: none;
+      border-radius: 6px;
+      color: var(--text-muted);
+      cursor: pointer;
+      font-size: 0.8rem;
+      font-weight: 600;
+      padding: 0.3rem 0.9rem;
+      transition: background 0.15s, color 0.15s;
+    }
+
+    .view-btn:hover { color: var(--text); }
+    .view-btn.active { background: var(--accent); color: #fff; }
+
   </style>
 </head>
 <body>
@@ -571,6 +661,13 @@
 
     <div class="input-card">
       <div class="mode-toggle" id="modeToggle"></div>
+      <div class="view-toggle-row" style="justify-content:flex-start;margin-bottom:1rem">
+        <span class="view-toggle-label">Audience:</span>
+        <div class="view-toggle">
+          <button id="audParent" class="view-btn" onclick="setAudience(false)">Parent</button>
+          <button id="audChild"  class="view-btn" onclick="setAudience(true)">Child</button>
+        </div>
+      </div>
       <div class="input-row">
         <div id="urlWrapper">
           <input id="urlInput" type="url" placeholder="https://www.youtube.com/watch?v=..." autofocus />
@@ -607,9 +704,10 @@
     const statusText  = document.getElementById("statusText");
     const errorEl     = document.getElementById("error");
     const resultsEl   = document.getElementById("results");
-    let currentUrl    = "";
-    let currentTab    = "video";
-    let currentMode   = "url"; // "url" | "image-upload" | "video-upload" | "text-upload"
+    let currentUrl       = "";
+    let currentTab       = "video";
+    let currentMode      = "url"; // "url" | "image-upload" | "video-upload" | "text-upload"
+    let currentChildMode = localStorage.getItem("childMode") === "true";
 
     urlInput.addEventListener("keydown", (e) => {
       if (e.key === "Enter") analyse();
@@ -764,6 +862,28 @@
       return labels[key] || key;
     }
 
+    function formatCount(n) {
+      if (n == null) return "";
+      if (n >= 1000000) return (n / 1000000).toFixed(1).replace(/\.0$/, "") + "M";
+      if (n >= 1000) return (n / 1000).toFixed(1).replace(/\.0$/, "") + "K";
+      return n.toLocaleString();
+    }
+
+    function formatDuration(secs) {
+      const s = Math.floor(secs);
+      const m = Math.floor(s / 60);
+      const h = Math.floor(m / 60);
+      if (h > 0) return `${h}:${String(m % 60).padStart(2, "0")}:${String(s % 60).padStart(2, "0")}`;
+      return `${m}:${String(s % 60).padStart(2, "0")}`;
+    }
+
+    function formatDate(dateStr) {
+      if (!dateStr) return "";
+      try {
+        return new Date(dateStr).toLocaleDateString("en-GB", { day: "numeric", month: "short", year: "numeric" });
+      } catch { return dateStr; }
+    }
+
     function buildRing(score) {
       const r = 54;
       const circ = 2 * Math.PI * r;
@@ -779,7 +899,18 @@
         </svg>`;
     }
 
+    function setAudience(isChild) {
+      currentChildMode = isChild;
+      localStorage.setItem("childMode", isChild);
+      document.getElementById("audParent").classList.toggle("active", !isChild);
+      document.getElementById("audChild").classList.toggle("active",  isChild);
+    }
+
+    // Apply saved preference on load
+    setAudience(currentChildMode);
+
     function renderResults(data) {
+      lastResult = data;
       const r = data;
       const cats = r.categories;
 
@@ -788,18 +919,24 @@
         const examples = cat.examples && cat.examples.length > 0
           ? `<ul class="examples-list">${cat.examples.map(e => `<li>${escHtml(e)}</li>`).join("")}</ul>`
           : "";
+        const autoOpen = cat.severity === "moderate" || cat.severity === "severe";
         return `
-          <div class="category-card">
+          <div class="category-card${autoOpen ? " open" : ""}" onclick="this.classList.toggle('open')">
             <div class="category-header">
               <span class="category-name">${categoryLabel(key)}</span>
-              <span class="severity-badge severity-${cat.severity}">${cat.severity}</span>
+              <div style="display:flex;align-items:center;gap:0.5rem">
+                <span class="severity-badge severity-${cat.severity}">${cat.severity}</span>
+                <span class="category-chevron">▾</span>
+              </div>
             </div>
             <div class="bar-track">
               <div class="bar-fill" style="width:${barPct}%;background:${categoryColor(cat.score)}"></div>
             </div>
-            <div class="category-details">
-              ${escHtml(cat.details)}
-              ${examples}
+            <div class="category-details-wrapper">
+              <div class="category-details">
+                ${escHtml(cat.details)}
+                ${examples}
+              </div>
             </div>
           </div>`;
       }).join("");
@@ -815,11 +952,27 @@
         ? `<span>${escHtml(r.video_id)}</span>`
         : `<a href="${escHtml(currentUrl)}" target="_blank" rel="noopener noreferrer">${escHtml(r.video_id)}</a>`;
 
+      const ytMetaHtml = r.yt_title ? `
+        <div class="yt-meta-card">
+          <div class="yt-meta-title">
+            <a href="${escHtml(currentUrl)}" target="_blank" rel="noopener noreferrer">${escHtml(r.yt_title)}</a>
+          </div>
+          <div class="yt-meta-stats">
+            ${r.yt_channel    ? `<span>${escHtml(r.yt_channel)}</span>` : ""}
+            ${r.yt_upload_date ? `<span>${formatDate(r.yt_upload_date)}</span>` : ""}
+            ${r.yt_views  != null ? `<span>${formatCount(r.yt_views)} views</span>` : ""}
+            ${r.yt_likes  != null ? `<span>${formatCount(r.yt_likes)} likes</span>` : ""}
+            ${r.yt_duration   ? `<span>${formatDuration(r.yt_duration)}</span>` : ""}
+          </div>
+        </div>` : "";
+
       resultsEl.innerHTML = `
+        ${ytMetaHtml}
         <div class="video-meta">
           ${metaIdHtml}
           &nbsp;·&nbsp; ${sourceLabel}
           ${r.language && r.language !== "unknown" ? ` &nbsp;·&nbsp; ${escHtml(r.language)}` : ""}
+          ${r.is_child_mode ? `<span class="demo-label" style="background:rgba(99,102,241,0.15);border-color:rgba(99,102,241,0.4);color:var(--accent-hover)">Child Mode</span>` : ""}
           ${demoLabel}
         </div>
 
@@ -852,7 +1005,7 @@
         </div>
 
         <div class="guidance-card">
-          <h3>Parental Guidance</h3>
+          <h3>${currentChildMode ? "Worth chatting to your parents about" : "Parental Guidance"}</h3>
           <p>${escHtml(r.parental_guidance)}</p>
         </div>
       `;
@@ -884,7 +1037,7 @@
         }
         if (currentTab === "video") currentUrl = value;
         endpoint = currentTab === "video" ? "/analyse" : currentTab === "image" ? "/analyse-image" : "/explain";
-        const body = currentTab === "term" ? { term: value } : { url: value };
+        const body = currentTab === "term" ? { term: value } : { url: value, child_mode: currentChildMode };
         fetchOptions = { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) };
       } else {
         const file = fileInput.files[0];
@@ -894,6 +1047,7 @@
                  : "/upload-image";
         const formData = new FormData();
         formData.append("file", file);
+        formData.append("child_mode", currentChildMode);
         fetchOptions = { method: "POST", body: formData };
       }
 
